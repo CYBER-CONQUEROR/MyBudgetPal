@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './dTdexpense.css';
+import walletImage from './wallet.png'; // Import your image here
 
 // --- API Service ---
 const API_BASE_URL = "http://localhost:5000/api";
@@ -123,8 +124,15 @@ function ExpensesApp() {
     return (
         <div className="container">
             <header className="header">
+                {/* Image added here! */}
+                <img src={walletImage} alt="Wallet Icon" className="header-image" /> 
                 <h1>💰 Day-to-Day Expenses Manager</h1>
                 <p>Track your daily spending and stay on budget.</p>
+                <div className="header-decoration">
+                    <span className="floating-coin">🪙</span>
+                    <span className="floating-bill">💵</span>
+                    <span className="floating-gem">💎</span>
+                </div>
             </header>
 
             {error && <div className="error-banner">{error}</div>}
@@ -234,7 +242,7 @@ function FiltersComponent({ filters, setFilters }) {
     };
 
     return (
-        <div className="card">
+        <div className="card filters-card">
             <h3>🔍 Filters & Sorting</h3>
             <div className="filters-grid">
                 <select name="category" value={filters.category} onChange={handleChange}>
@@ -258,22 +266,26 @@ function FiltersComponent({ filters, setFilters }) {
 
 function StatsComponent({ stats }) {
     return (
-        <div className="card">
+        <div className="card stats-card">
             <h3>📊 Expenses Overview</h3>
             <div className="stats-grid">
-                <div className="stats-card">
+                <div className="stats-item total-spent">
+                    <div className="stats-icon">💰</div>
                     <h4>Total Spent</h4>
                     <p>LKR {stats.totalAmount?.toLocaleString() || '0'}</p>
                 </div>
-                <div className="stats-card">
+                <div className="stats-item transactions">
+                    <div className="stats-icon">🧾</div>
                     <h4>Transactions</h4>
                     <p>{stats.totalExpenses || '0'}</p>
                 </div>
-                <div className="stats-card">
+                <div className="stats-item average">
+                    <div className="stats-icon">📊</div>
                     <h4>Average</h4>
                     <p>LKR {stats.averageExpense?.toFixed(2) || '0.00'}</p>
                 </div>
-                <div className="stats-card">
+                <div className="stats-item top-category">
+                    <div className="stats-icon">🏆</div>
                     <h4>Top Category</h4>
                     <p>{stats.categoryStats[0]?._id || 'N/A'}</p>
                 </div>
@@ -283,18 +295,38 @@ function StatsComponent({ stats }) {
 }
 
 function ExpensesList({ expenses, loading, onEdit, onDelete }) {
-    if (loading) return <div className="spinner-container"><div className="spinner"></div><p>Loading...</p></div>;
-    if (expenses.length === 0) return <div className="card empty-state"><h3>💸 No expenses found.</h3><p>Try adjusting your filters or add a new expense!</p></div>;
+    if (loading) return (
+        <div className="spinner-container">
+            <div className="money-spinner">
+                <div className="coin">💰</div>
+            </div>
+            <p>Counting your money...</p>
+        </div>
+    );
+    
+    if (expenses.length === 0) return (
+        <div className="card empty-state">
+            <div className="empty-icon">💸</div>
+            <h3>No expenses found.</h3>
+            <p>Start tracking your spending journey!</p>
+        </div>
+    );
 
     return (
         <div className="card">
             <h3>📝 Your Expenses ({expenses.length})</h3>
             <div className="expenses-grid">
                 {expenses.map(expense => (
-                    <div key={expense._id} className="expense-card">
+                    <div 
+                        key={expense._id} 
+                        className="expense-card"
+                        data-category={expense.category}
+                    >
                         <div className="expense-header">
                             <h4 className="expense-title">{expense.title}</h4>
-                            <span className={`category-badge category-${expense.category.toLowerCase()}`}>{expense.category}</span>
+                            <span className={`category-badge category-${expense.category.toLowerCase()}`}>
+                                {expense.category}
+                            </span>
                         </div>
                         <div className="expense-amount">LKR {expense.amount.toLocaleString()}</div>
                         <div className="expense-details">
@@ -303,8 +335,8 @@ function ExpensesList({ expenses, loading, onEdit, onDelete }) {
                         </div>
                         {expense.description && <p className="expense-description">📝 {expense.description}</p>}
                         <div className="expense-actions">
-                            <button className="button-icon" onClick={() => onEdit(expense)}>✏️</button>
-                            <button className="button-icon button-delete" onClick={() => onDelete(expense._id)}>🗑️</button>
+                            <button className="button-icon edit-btn" onClick={() => onEdit(expense)}>✏️</button>
+                            <button className="button-icon delete-btn" onClick={() => onDelete(expense._id)}>🗑️</button>
                         </div>
                     </div>
                 ))}

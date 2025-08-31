@@ -1,25 +1,37 @@
-import logo from './logo.svg';
-import './App.css';
+import * as React from "react";
+import { ThemeProvider, createTheme, CssBaseline } from "@mui/material";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import Layout from "./pages/Layout";
+import SalaryPage from "./pages/SalaryPage";
+import CommitmentsPage from "./pages/bank";
+import EventsPage from "./pages/EventsPage";
+import DtdExpense from './pages/DailyPage';
+import SavingsPage from "./pages/SavingsPage";
+import NotificationsPage from "./pages/NotificationsPage";
+import Home from "./pages/Home";
 
-function App() {
+const theme = createTheme({
+  palette: { mode: "light", primary: { main: "#1976d2" } },
+});
+
+export default function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <BrowserRouter>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<Home />} />
+            <Route path="/income" element={<SalaryPage />} />
+            <Route path="/budget" element={<SalaryPage />} />
+            <Route path="/commitments" element={<CommitmentsPage />} />
+            <Route path="/events" element={<EventsPage />} />
+            <Route path="/daily" element={<DtdExpense />} />
+            <Route path="/savings" element={<SavingsPage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }
-
-export default App;

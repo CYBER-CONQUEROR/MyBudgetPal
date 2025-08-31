@@ -1,0 +1,294 @@
+{
+  "info": {
+    "name": "MyBudgetPal API",
+    "description": "API collection for MyBudgetPal budget management application",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": ["{{baseUrl}}"],
+          "path": [""]
+        }
+      }
+    },
+    {
+      "name": "Events",
+      "item": [
+        {
+          "name": "Get All Events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/events",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "events"]
+            }
+          }
+        },
+        {
+          "name": "Get Event by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/events/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "events", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "event_id_here"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create New Event",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Birthday Party\",\n  \"date\": \"2024-12-25\",\n  \"budget\": 500,\n  \"description\": \"My birthday celebration\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/events",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "events"]
+            }
+          }
+        },
+        {
+          "name": "Update Event",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Birthday Party\",\n  \"budget\": 600,\n  \"expenses\": 150\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/events/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "events", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "event_id_here"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Event",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/events/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "events", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "event_id_here"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Expenses",
+      "item": [
+        {
+          "name": "Get All Expenses",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "expenses"]
+            }
+          }
+        },
+        {
+          "name": "Get Expenses with Filters",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses?category=Food&startDate=2024-01-01&endDate=2024-12-31",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "expenses"],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "Food"
+                },
+                {
+                  "key": "startDate",
+                  "value": "2024-01-01"
+                },
+                {
+                  "key": "endDate",
+                  "value": "2024-12-31"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Expense Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "expenses", "stats"]
+            }
+          }
+        },
+        {
+          "name": "Get Expense by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "expenses", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "expense_id_here"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create New Expense",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Lunch at Restaurant\",\n  \"amount\": 25.50,\n  \"category\": \"Food\",\n  \"date\": \"2024-12-20\",\n  \"description\": \"Business lunch with client\",\n  \"paymentMethod\": \"Credit Card\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "expenses"]
+            }
+          }
+        },
+        {
+          "name": "Create Recurring Expense",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Netflix Subscription\",\n  \"amount\": 15.99,\n  \"category\": \"Entertainment\",\n  \"isRecurring\": true,\n  \"recurringFrequency\": \"Monthly\",\n  \"paymentMethod\": \"Credit Card\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "expenses"]
+            }
+          }
+        },
+        {
+          "name": "Update Expense",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Updated Lunch Expense\",\n  \"amount\": 30.00,\n  \"description\": \"Updated description\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "expenses", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "expense_id_here"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Expense",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/expenses/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "expenses", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "expense_id_here"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
+
+
+
+
+

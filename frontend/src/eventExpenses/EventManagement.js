@@ -1,16 +1,33 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import axios from "axios";
 import "./EventManagement.css";
 
 function EventManagement() {
-  const [events, setEvents] = useState([
-    { id: 1, name: "Birthday Party", date: "2025-08-20", budget: 5000, estimated: 3000, expenses: 2000, notes: "Cake + decorations" },
-    { id: 2, name: "Wedding Anniversary", date: "2025-09-10", budget: 7000, estimated: 5000, expenses: 4000, notes: "Dinner reservation" },
-  ]);
-
+  const [events, setEvents] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [newEvent, setNewEvent] = useState({ name: "", date: "", budget: "", estimated: "", expenses: "", notes: "" });
   const [errors, setErrors] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortKey, setSortKey] = useState(""); // "", "date", "budget", "expenses"
+  const [toastMessage, setToastMessage] = useState("");
+
+  const API_URL = "http://localhost:5000/api/events";
+
+  const fetchEvents = async () => {
+    setLoading(true);
+    try {
+      const response = await axios.get(API_URL);
+      setEvents(response.data);
+    } catch (error) {
+      console.error("Error fetching events:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchEvents(); }, []);
 
   const validateForm = () => {
     const errs = {};
@@ -22,7 +39,7 @@ function EventManagement() {
     return errs;
   };
 
-  const handleAddOrUpdateEvent = () => {
+  const handleAddOrUpdateEvent = async () => {
     const validationErrors = validateForm();
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
@@ -33,53 +50,78 @@ function EventManagement() {
       ...newEvent,
       budget: parseFloat(newEvent.budget),
       estimated: parseFloat(newEvent.estimated) || 0,
-      expenses: parseFloat(newEvent.expenses) || 0
+      expenses: parseFloat(newEvent.expenses) || 0,
     };
 
-    if (editingId) {
-      setEvents(events.map(e => e.id === editingId ? { ...eventObj, id: editingId } : e));
+    try {
+      if (editingId) {
+        await axios.put(`${API_URL}/${editingId}`, eventObj);
+        showToast("Event updated successfully!");
+      } else {
+        await axios.post(API_URL, eventObj);
+        showToast("Event added successfully!");
+      }
+      fetchEvents();
+      setShowForm(false);
       setEditingId(null);
-    } else {
-      setEvents([...events, { ...eventObj, id: Date.now() }]);
-    }
-
-    setNewEvent({ name: "", date: "", budget: "", estimated: "", expenses: "", notes: "" });
-    setErrors({});
-    setShowForm(false);
-  };
-
-  const handleDelete = id => {
-    if (window.confirm("Are you sure you want to delete this event?")) {
-      setEvents(events.filter(e => e.id !== id));
+      setNewEvent({ name: "", date: "", budget: "", estimated: "", expenses: "", notes: "" });
+      setErrors({});
+    } catch (error) {
+      console.error("Error saving event:", error);
+      showToast("Error saving event!");
     }
   };
 
-  const handleEdit = event => {
+  const handleDelete = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this event?")) return;
+    try {
+      await axios.delete(`${API_URL}/${id}`);
+      fetchEvents();
+      showToast("Event deleted successfully!");
+    } catch (error) {
+      console.error("Error deleting event:", error);
+      showToast("Error deleting event!");
+    }
+  };
+
+  const handleEdit = (event) => {
     setNewEvent({ ...event });
-    setEditingId(event.id);
+    setEditingId(event._id);
     setShowForm(true);
   };
 
+  const showToast = (message) => {
+    setToastMessage(message);
+    setTimeout(() => setToastMessage(""), 3000);
+  };
+
+  // Filtering
+  const filteredEvents = events.filter(e =>
+    e.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (e.notes && e.notes.toLowerCase().includes(searchTerm.toLowerCase()))
+  );
+
+  // Sorting
+  if (sortKey) {
+    filteredEvents.sort((a, b) => {
+      if (sortKey === "date") return new Date(a.date) - new Date(b.date);
+      if (sortKey === "budget") return a.budget - b.budget;
+      if (sortKey === "expenses") return a.expenses - b.expenses;
+      return 0;
+    });
+  }
+
   const totalBudget = events.reduce((sum, e) => sum + e.budget, 0);
+  const totalExpenses = events.reduce((sum, e) => sum + e.expenses, 0);
 
   return (
     <>
-      {/* ===== Header ===== */}
       <header className="app-header">
         <h1>MyBudgetPal</h1>
-        <nav>
-          <ul>
-            <li>Home</li>
-            <li>Events</li>
-            <li>About</li>
-          </ul>
-        </nav>
       </header>
 
-      {/* ===== Main Container ===== */}
       <div className="container">
         <h1>🎉 Event Expense Management</h1>
-
         <div className="intro-text">
           <h2>“Plan Smart. Spend Wise. Celebrate More.”</h2>
           <p>Organize and track your family’s event expenses in detail.</p>
@@ -93,6 +135,29 @@ function EventManagement() {
           <div className="summary-card">
             <h3>Total Budget</h3>
             <p>Rs. {totalBudget}</p>
+          </div>
+          <div className="summary-card">
+            <h3>Total Expenses</h3>
+            <p>Rs. {totalExpenses}</p>
+          </div>
+          <div className="summary-card">
+            <h3>Remaining Budget</h3>
+            <p>Rs. {totalBudget - totalExpenses}</p>
+          </div>
+        </div>
+
+        <div className="controls">
+          <input
+            type="text"
+            placeholder="🔍 Search by name or notes..."
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+          />
+          <div className="sort-buttons">
+            <button onClick={() => setSortKey("date")}>Sort by Date</button>
+            <button onClick={() => setSortKey("budget")}>Sort by Budget</button>
+            <button onClick={() => setSortKey("expenses")}>Sort by Expenses</button>
+            <button onClick={() => setSortKey("")}>Clear Sort</button>
           </div>
         </div>
 
@@ -120,7 +185,7 @@ function EventManagement() {
               {errors.expenses && <small className="error">{errors.expenses}</small>}
 
               <textarea placeholder="Notes" value={newEvent.notes} onChange={e => setNewEvent({ ...newEvent, notes: e.target.value })}></textarea>
-              
+
               <div className="form-actions">
                 <button onClick={handleAddOrUpdateEvent}>✅ {editingId ? "Update" : "Save"}</button>
                 <button className="cancel-btn" onClick={() => { setShowForm(false); setErrors({}); setEditingId(null); }}>❌ Cancel</button>
@@ -129,39 +194,40 @@ function EventManagement() {
           </div>
         )}
 
-        <div className="events-grid">
-          {events.map(event => {
-            const spentPercentage = Math.min(Math.round((event.expenses / event.budget) * 100), 100);
-            const barClass = spentPercentage <= 100 ? "budget-bar-green" : "budget-bar-red";
-            return (
-              <div className="event-card" key={event.id}>
-                <h3>{event.name}</h3>
-                <p>📅 {event.date}</p>
-                <p>💰 Budget: Rs. {event.budget}</p>
-                <p>📊 Estimated: Rs. {event.estimated}</p>
-                <p>💸 Expenses: Rs. {event.expenses}</p>
-                {event.notes && <p>📝 Notes: {event.notes}</p>}
+        {loading ? <p>Loading events...</p> : (
+          <div className="events-grid">
+            {filteredEvents.map(event => {
+              const spentPercentage = Math.min(Math.round((event.expenses / event.budget) * 100), 150);
+              const barClass = event.expenses > event.budget ? "budget-bar-red" : "budget-bar-green";
+              return (
+                <div className={`event-card ${event.expenses > event.budget ? "overspent" : ""}`} key={event._id}>
+                  <h3>{event.name}</h3>
+                  <p>📅 {new Date(event.date).toLocaleDateString()}</p>
+                  <p>💰 Budget: Rs. {event.budget}</p>
+                  <p>📊 Estimated: Rs. {event.estimated}</p>
+                  <p>💸 Expenses: Rs. {event.expenses}</p>
+                  {event.notes && <p>📝 Notes: {event.notes}</p>}
 
-                <div className="budget-bar-container">
-                  <div className={`budget-bar ${barClass}`} style={{ width: `${spentPercentage}%` }}>
-                    <span className="bar-label">{spentPercentage}%</span>
+                  <div className="budget-bar-container">
+                    <div className={`budget-bar ${barClass}`} style={{ width: `${spentPercentage}%` }}>
+                      <span className="bar-label">{spentPercentage}%</span>
+                    </div>
+                  </div>
+
+                  <div className="event-actions">
+                    <button onClick={() => handleEdit(event)}>✏️ Edit</button>
+                    <button onClick={() => handleDelete(event._id)}>🗑️ Delete</button>
                   </div>
                 </div>
-
-                <div className="event-actions">
-                  <button onClick={() => handleEdit(event)}>✏️ Edit</button>
-                  <button onClick={() => handleDelete(event.id)}>🗑️ Delete</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* ===== Footer ===== */}
-      <footer className="app-footer">
-        © 2025 MyBudgetPal. All Rights Reserved.
-      </footer>
+      {toastMessage && <div className="toast">{toastMessage}</div>}
+
+      <footer className="app-footer">© 2025 MyBudgetPal. All Rights Reserved.</footer>
     </>
   );
 }

@@ -138,6 +138,65 @@
 .stack{ display:flex; flex-direction:column; gap:2px; }
 .stack .title{ font-weight:700; }
 .stack .muted{ color:var(--muted); font-size:.85rem; }
+/* 🔎 Search bar styles */
+.search-bar {
+  margin: 1rem 0;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-bar .icon {
+  font-size: 1.1rem;
+  color: var(--muted);
+  margin-right: 6px;
+}
+
+.search-bar input {
+  flex: 1;
+  max-width: 280px;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background-color: #fff;
+  transition: all 0.2s ease-in-out;
+}
+
+.search-bar input:focus {
+  border-color: var(--brand-2);
+  box-shadow: 0 0 0 3px var(--ring);
+  outline: none;
+}
+
+/* Placeholder color */
+.search-bar input::placeholder {
+  color: #94a3b8;
+}
+
+/* Filter dropdown */
+.search-bar select {
+  padding: 0.55rem 0.8rem;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.95rem;
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+
+.search-bar select:hover {
+  border-color: var(--brand);
+}
+
+.search-bar select:focus {
+  border-color: var(--brand-2);
+  box-shadow: 0 0 0 3px var(--ring);
+  outline: none;
+}
+
 
 /* ===== Buttons ===== */
 .btn{

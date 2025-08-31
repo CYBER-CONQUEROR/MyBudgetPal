@@ -8,12 +8,9 @@ function EventManagement() {
   ]);
 
   const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState(null); // To track which event is being edited
-  const [newEvent, setNewEvent] = useState({
-    name: "", date: "", budget: "", estimated: "", expenses: "", notes: ""
-  });
-
-  const [errors, setErrors] = useState({}); // For validation errors
+  const [editingId, setEditingId] = useState(null);
+  const [newEvent, setNewEvent] = useState({ name: "", date: "", budget: "", estimated: "", expenses: "", notes: "" });
+  const [errors, setErrors] = useState({});
 
   const validateForm = () => {
     const errs = {};
@@ -32,24 +29,18 @@ function EventManagement() {
       return;
     }
 
+    const eventObj = {
+      ...newEvent,
+      budget: parseFloat(newEvent.budget),
+      estimated: parseFloat(newEvent.estimated) || 0,
+      expenses: parseFloat(newEvent.expenses) || 0
+    };
+
     if (editingId) {
-      // Update existing event
-      setEvents(events.map(e => 
-        e.id === editingId ? { ...newEvent, id: editingId, budget: parseFloat(newEvent.budget), estimated: parseFloat(newEvent.estimated) || 0, expenses: parseFloat(newEvent.expenses) || 0 } : e
-      ));
+      setEvents(events.map(e => e.id === editingId ? { ...eventObj, id: editingId } : e));
       setEditingId(null);
     } else {
-      // Add new event
-      setEvents([
-        ...events,
-        { 
-          ...newEvent, 
-          id: Date.now(), 
-          budget: parseFloat(newEvent.budget), 
-          estimated: parseFloat(newEvent.estimated) || 0,
-          expenses: parseFloat(newEvent.expenses) || 0
-        }
-      ]);
+      setEvents([...events, { ...eventObj, id: Date.now() }]);
     }
 
     setNewEvent({ name: "", date: "", budget: "", estimated: "", expenses: "", notes: "" });
@@ -57,21 +48,14 @@ function EventManagement() {
     setShowForm(false);
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = id => {
     if (window.confirm("Are you sure you want to delete this event?")) {
       setEvents(events.filter(e => e.id !== id));
     }
   };
 
-  const handleEdit = (event) => {
-    setNewEvent({
-      name: event.name,
-      date: event.date,
-      budget: event.budget,
-      estimated: event.estimated,
-      expenses: event.expenses,
-      notes: event.notes
-    });
+  const handleEdit = event => {
+    setNewEvent({ ...event });
     setEditingId(event.id);
     setShowForm(true);
   };
@@ -79,100 +63,106 @@ function EventManagement() {
   const totalBudget = events.reduce((sum, e) => sum + e.budget, 0);
 
   return (
-    <div className="container">
-      <h1>🎉 Event Expense Management</h1>
+    <>
+      {/* ===== Header ===== */}
+      <header className="app-header">
+        <h1>MyBudgetPal</h1>
+        <nav>
+          <ul>
+            <li>Home</li>
+            <li>Events</li>
+            <li>About</li>
+          </ul>
+        </nav>
+      </header>
 
-      <div className="intro-text">
-        <h2>“Plan Smart. Spend Wise. Celebrate More.”</h2>
-        <p>Organize and track your family’s event expenses in detail.</p>
-      </div>
+      {/* ===== Main Container ===== */}
+      <div className="container">
+        <h1>🎉 Event Expense Management</h1>
 
-      <div className="summary">
-        <div className="summary-card">
-          <h3>Total Events</h3>
-          <p>{events.length}</p>
+        <div className="intro-text">
+          <h2>“Plan Smart. Spend Wise. Celebrate More.”</h2>
+          <p>Organize and track your family’s event expenses in detail.</p>
         </div>
-        <div className="summary-card">
-          <h3>Total Budget</h3>
-          <p>Rs. {totalBudget}</p>
-        </div>
-      </div>
 
-      <button className="add-event-btn" onClick={() => { setShowForm(true); setEditingId(null); }}>
-        ➕ Add Event
-      </button>
-
-      {showForm && (
-        <div className="form-popup">
-          <div className="form-card">
-            <h2>{editingId ? "Edit Event" : "Add New Event"}</h2>
-            <input type="text" placeholder="Event Name" value={newEvent.name} 
-              onChange={e => setNewEvent({ ...newEvent, name: e.target.value })} />
-            {errors.name && <small className="error">{errors.name}</small>}
-
-            <input type="date" value={newEvent.date} 
-              onChange={e => setNewEvent({ ...newEvent, date: e.target.value })} />
-            {errors.date && <small className="error">{errors.date}</small>}
-
-            <input type="number" placeholder="Budget (Rs.)" value={newEvent.budget} 
-              onChange={e => setNewEvent({ ...newEvent, budget: e.target.value })} />
-            {errors.budget && <small className="error">{errors.budget}</small>}
-
-            <input type="number" placeholder="Estimated Expenses (Rs.)" value={newEvent.estimated} 
-              onChange={e => setNewEvent({ ...newEvent, estimated: e.target.value })} />
-            {errors.estimated && <small className="error">{errors.estimated}</small>}
-
-            <input type="number" placeholder="Actual Expenses (Rs.)" value={newEvent.expenses} 
-              onChange={e => setNewEvent({ ...newEvent, expenses: e.target.value })} />
-            {errors.expenses && <small className="error">{errors.expenses}</small>}
-
-            <textarea placeholder="Notes" value={newEvent.notes} 
-              onChange={e => setNewEvent({ ...newEvent, notes: e.target.value })}></textarea>
-            
-            <div className="form-actions">
-              <button onClick={handleAddOrUpdateEvent}>✅ {editingId ? "Update" : "Save"}</button>
-              <button className="cancel-btn" onClick={() => { setShowForm(false); setErrors({}); setEditingId(null); }}>❌ Cancel</button>
-            </div>
+        <div className="summary">
+          <div className="summary-card">
+            <h3>Total Events</h3>
+            <p>{events.length}</p>
+          </div>
+          <div className="summary-card">
+            <h3>Total Budget</h3>
+            <p>Rs. {totalBudget}</p>
           </div>
         </div>
-      )}
 
-      <div className="events-grid">
-        {events.map(event => {
-          const spentPercentage = (event.expenses / event.budget) * 100;
-          const barClass = spentPercentage <= 100 ? "budget-bar-green" : "budget-bar-red";
-          return (
-            <div className="event-card" key={event.id}>
-              <h3>{event.name}</h3>
-              <p>📅 {event.date}</p>
-              <p>💰 Budget: Rs. {event.budget}</p>
-              <p>📊 Estimated: Rs. {event.estimated}</p>
-              <p>💸 Expenses: Rs. {event.expenses}</p>
-              {event.notes && <p>📝 Notes: {event.notes}</p>}
+        <button className="add-event-btn" onClick={() => { setShowForm(true); setEditingId(null); }}>
+          ➕ Add Event
+        </button>
 
-              <div className="budget-bar-container">
-                <div className={`budget-bar ${barClass}`} style={{ width: `${Math.min(spentPercentage, 100)}%` }}></div>
-              </div>
+        {showForm && (
+          <div className="form-popup">
+            <div className="form-card">
+              <h2>{editingId ? "Edit Event" : "Add New Event"}</h2>
+              <input type="text" placeholder="Event Name" value={newEvent.name} onChange={e => setNewEvent({ ...newEvent, name: e.target.value })} />
+              {errors.name && <small className="error">{errors.name}</small>}
 
-              <div style={{ marginTop: "10px", display: "flex", gap: "10px" }}>
-                <button 
-                  style={{ background: "#f39c12", color: "white", borderRadius: "6px", flex: 1 }}
-                  onClick={() => handleEdit(event)}
-                >
-                  ✏️ Edit
-                </button>
-                <button 
-                  style={{ background: "#e74c3c", color: "white", borderRadius: "6px", flex: 1 }}
-                  onClick={() => handleDelete(event.id)}
-                >
-                  🗑️ Delete
-                </button>
+              <input type="date" value={newEvent.date} onChange={e => setNewEvent({ ...newEvent, date: e.target.value })} />
+              {errors.date && <small className="error">{errors.date}</small>}
+
+              <input type="number" placeholder="Budget (Rs.)" value={newEvent.budget} onChange={e => setNewEvent({ ...newEvent, budget: e.target.value })} />
+              {errors.budget && <small className="error">{errors.budget}</small>}
+
+              <input type="number" placeholder="Estimated Expenses (Rs.)" value={newEvent.estimated} onChange={e => setNewEvent({ ...newEvent, estimated: e.target.value })} />
+              {errors.estimated && <small className="error">{errors.estimated}</small>}
+
+              <input type="number" placeholder="Actual Expenses (Rs.)" value={newEvent.expenses} onChange={e => setNewEvent({ ...newEvent, expenses: e.target.value })} />
+              {errors.expenses && <small className="error">{errors.expenses}</small>}
+
+              <textarea placeholder="Notes" value={newEvent.notes} onChange={e => setNewEvent({ ...newEvent, notes: e.target.value })}></textarea>
+              
+              <div className="form-actions">
+                <button onClick={handleAddOrUpdateEvent}>✅ {editingId ? "Update" : "Save"}</button>
+                <button className="cancel-btn" onClick={() => { setShowForm(false); setErrors({}); setEditingId(null); }}>❌ Cancel</button>
               </div>
             </div>
-          );
-        })}
+          </div>
+        )}
+
+        <div className="events-grid">
+          {events.map(event => {
+            const spentPercentage = Math.min(Math.round((event.expenses / event.budget) * 100), 100);
+            const barClass = spentPercentage <= 100 ? "budget-bar-green" : "budget-bar-red";
+            return (
+              <div className="event-card" key={event.id}>
+                <h3>{event.name}</h3>
+                <p>📅 {event.date}</p>
+                <p>💰 Budget: Rs. {event.budget}</p>
+                <p>📊 Estimated: Rs. {event.estimated}</p>
+                <p>💸 Expenses: Rs. {event.expenses}</p>
+                {event.notes && <p>📝 Notes: {event.notes}</p>}
+
+                <div className="budget-bar-container">
+                  <div className={`budget-bar ${barClass}`} style={{ width: `${spentPercentage}%` }}>
+                    <span className="bar-label">{spentPercentage}%</span>
+                  </div>
+                </div>
+
+                <div className="event-actions">
+                  <button onClick={() => handleEdit(event)}>✏️ Edit</button>
+                  <button onClick={() => handleDelete(event.id)}>🗑️ Delete</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </div>
+
+      {/* ===== Footer ===== */}
+      <footer className="app-footer">
+        © 2025 MyBudgetPal. All Rights Reserved.
+      </footer>
+    </>
   );
 }
 

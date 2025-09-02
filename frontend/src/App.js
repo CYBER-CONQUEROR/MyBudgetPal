@@ -11,6 +11,7 @@ import NotificationsPage from "./pages/NotificationsPage";
 import Home from "./pages/Home";
 import BudgetPlanPage from "./pages/BudgetPlanPage";
 
+
 const theme = createTheme({
   palette: { mode: "light", primary: { main: "#1976d2" } },
 });

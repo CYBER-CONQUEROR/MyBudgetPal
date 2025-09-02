@@ -1,3 +1,11 @@
+/* src/index.css */
+
+/* Tailwind layers MUST come first */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Your globals */
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
@@ -11,3 +19,14 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+/* Component shortcuts using @apply (these must come AFTER Tailwind layers) */
+.card { @apply bg-card rounded-2xl shadow-soft border border-line/60; }
+.card-header { @apply px-5 pt-5 pb-2; }
+.card-body { @apply px-5 pb-5; }
+.btn { @apply inline-flex items-center gap-2 rounded-xl px-4 py-2 font-medium transition; }
+.btn-primary { @apply bg-indigoP text-white hover:opacity-90 focus:outline-none focus:ring-4 focus:ring-ring; }
+.btn-ghost { @apply bg-white border border-line/70 hover:bg-slate-50; }
+.input { @apply rounded-xl border border-line/70 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-ring; }
+.pill { @apply rounded-full bg-slate-100 px-3 py-1 text-slate-600 text-sm; }
+.table-head { @apply bg-slate-50 text-slate-500 font-semibold text-[13px]; }

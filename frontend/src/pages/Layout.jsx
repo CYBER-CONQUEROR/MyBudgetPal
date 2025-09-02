@@ -18,6 +18,7 @@ const drawerWidth = 240;
 const links = [
   { to: "/", label: "Home", icon: <HomeIcon /> },
   { to: "/income", label: "Income Management", icon: <WalletIcon /> },
+  { to: "/budget", label: "Budget Management", icon: <WalletIcon /> },
   { to: "/commitments", label: "Commitments", icon: <AccountBalanceIcon /> },
   { to: "/events", label: "Events", icon: <EventIcon /> },
   { to: "/daily", label: "Daily Expenses", icon: <ShoppingCartIcon /> },

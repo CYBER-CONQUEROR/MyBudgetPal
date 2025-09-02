@@ -8,6 +8,7 @@ import expenseRoutes from "./dayToDayExpenses/expenseRoutes.js";
 import bankRoutes from "./bankTransactions/bankRoutes.js";
 import categoryRoutes from "./dayToDayExpenses/categoryRoutes.js";
 import budgetPlanRouter from "./budgetManagement/budgetRoutes.js";
+import eventRoutes from "./eventExpenses/eventRoutes.js";
 
 dotenv.config();
 
@@ -32,6 +33,7 @@ app.use("/api/expenses", expenseRoutes);
 app.use("/api/transactions", bankRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/budget", budgetPlanRouter);
+app.use("/api/events", eventRoutes);
 
 // 404 fallback
 app.use((req, res) => res.status(404).json({ error: "Not found" }));

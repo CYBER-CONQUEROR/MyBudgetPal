@@ -10,6 +10,8 @@ import SavingsPage from "./pages/SavingsPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import Home from "./pages/Home";
 import BudgetPlanPage from "./pages/BudgetPlanPage";
+import ContactUs from "./pages/ContactUs";
+
 
 
 const theme = createTheme({
@@ -31,6 +33,7 @@ export default function App() {
             <Route path="/daily" element={<DtdExpense />} />
             <Route path="/savings" element={<SavingsPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/contactus" element={<ContactUs />} />
           </Route>
         </Routes>
       </BrowserRouter>

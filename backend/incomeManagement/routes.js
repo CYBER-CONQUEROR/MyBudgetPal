@@ -1,11 +1,14 @@
-import { Router } from "express";
-import * as controller from "./controller.js";
+// routes/income.routes.js
+import express from "express";
+import * as IncomeCtrl from "./controller.js";
 
-const router = Router();
+const router = express.Router();
 
-router.get("/", controller.list);
-router.post("/", controller.create);
-router.put("/:id", controller.update);
-router.delete("/:id", controller.remove);
+// CRUD
+router.post("/",     IncomeCtrl.createIncome);
+router.get("/",      IncomeCtrl.listIncomes);
+router.get("/:id",   IncomeCtrl.getIncome);
+router.patch("/:id", IncomeCtrl.updateIncome);
+router.delete("/:id",IncomeCtrl.deleteIncome);
 
 export default router;

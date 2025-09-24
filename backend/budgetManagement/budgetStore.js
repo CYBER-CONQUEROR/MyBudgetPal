@@ -1,8 +1,6 @@
 // backend/budgetPlan/store.js
 import BudgetPlan from "./budgetModel.js";
 
-const key = (userId, period) => `${userId}_${period}`;
-
 /* ------------------------------ Plans ------------------------------ */
 
 /**
@@ -14,7 +12,7 @@ export async function listPlans(userId, range, opts = {}) {
   const q = { userId };
   if (range?.from || range?.to) {
     q.period = {};
-    if (range.from) q.period.$gte = range.from; // works lexicographically for "YYYY-MM"
+    if (range.from) q.period.$gte = range.from; // lexicographic for YYYY-MM
     if (range.to)   q.period.$lte = range.to;
   }
 
@@ -35,129 +33,174 @@ export async function getPlan(userId, period) {
     .exec();
 }
 
-/**
- * Create a brand-new plan (controller ensures 409 if exists).
- * You can also just call replacePlan; keeping this for clarity.
- */
-export async function createPlan(userId, period, payload) {
-  const _id = key(userId, period);
-  const doc = new BudgetPlan({ _id, userId, period, ...payload });
-  await doc.save();
-  return doc
-    .populate("dtd.subBudgets.categoryId", "name color");
+/** Create a brand-new plan (controller ensures 409 if exists) */
+export async function createPlan(userId, period, payloadCents) {
+  // payloadCents expected shape:
+  // { savings:{amountCents,rollover,hardCap}, commitments:{...}, events:{...}, dtd:{amountCents, subBudgets?} }
+  const doc = await BudgetPlan.create({
+    userId,
+    period,
+    savings: payloadCents.savings,
+    commitments: payloadCents.commitments,
+    events: payloadCents.events,
+    dtd: {
+      amountCents: payloadCents.dtd.amountCents,
+      ...(Array.isArray(payloadCents.dtd.subBudgets)
+        ? { subBudgets: payloadCents.dtd.subBudgets }
+        : {}),
+    },
+  });
+
+  return doc.populate("dtd.subBudgets.categoryId", "name color");
 }
 
 /** Replace/upsert full plan */
-export async function replacePlan(userId, period, payload) {
-  const _id = key(userId, period);
-  const doc = await BudgetPlan.findByIdAndUpdate(
-    _id,
-    { $set: { userId, period, ...payload } },
+export async function replacePlan(userId, period, payloadCents) {
+  const doc = await BudgetPlan.findOneAndUpdate(
+    { userId, period },
+    {
+      $set: {
+        savings: payloadCents.savings,
+        commitments: payloadCents.commitments,
+        events: payloadCents.events,
+        "dtd.amountCents": payloadCents.dtd.amountCents,
+        ...(Array.isArray(payloadCents.dtd.subBudgets)
+          ? { "dtd.subBudgets": payloadCents.dtd.subBudgets }
+          : {}),
+      },
+    },
     { upsert: true, new: true, setDefaultsOnInsert: true }
-  )
-    .populate("dtd.subBudgets.categoryId", "name color");
+  ).populate("dtd.subBudgets.categoryId", "name color");
   return doc;
 }
 
-/** Patch plan (partial update) */
-export async function patchPlan(userId, period, patch) {
-  const _id = key(userId, period);
+/** Patch plan (partial update in cents) */
+export async function patchPlan(userId, period, patchCents) {
+  const $set = {};
+  if (patchCents.savings) {
+    if (patchCents.savings.amountCents !== undefined)
+      $set["savings.amountCents"] = patchCents.savings.amountCents;
+    if (patchCents.savings.rollover !== undefined)
+      $set["savings.rollover"] = !!patchCents.savings.rollover;
+    if (patchCents.savings.hardCap !== undefined)
+      $set["savings.hardCap"] = !!patchCents.savings.hardCap;
+  }
+  if (patchCents.commitments) {
+    if (patchCents.commitments.amountCents !== undefined)
+      $set["commitments.amountCents"] = patchCents.commitments.amountCents;
+    if (patchCents.commitments.rollover !== undefined)
+      $set["commitments.rollover"] = !!patchCents.commitments.rollover;
+    if (patchCents.commitments.hardCap !== undefined)
+      $set["commitments.hardCap"] = !!patchCents.commitments.hardCap;
+  }
+  if (patchCents.events) {
+    if (patchCents.events.amountCents !== undefined)
+      $set["events.amountCents"] = patchCents.events.amountCents;
+    if (patchCents.events.rollover !== undefined)
+      $set["events.rollover"] = !!patchCents.events.rollover;
+    if (patchCents.events.hardCap !== undefined)
+      $set["events.hardCap"] = !!patchCents.events.hardCap;
+  }
+  if (patchCents.dtd) {
+    if (patchCents.dtd.amountCents !== undefined)
+      $set["dtd.amountCents"] = patchCents.dtd.amountCents;
+  }
 
-  // Only allow known top-level fields to be set
-  const allowed = {};
-  if (patch.savings)     allowed["savings"] = patch.savings;
-  if (patch.commitments) allowed["commitments"] = patch.commitments;
-  if (patch.events)      allowed["events"] = patch.events;
-  if (patch.dtd?.amount !== undefined) allowed["dtd.amount"] = patch.dtd.amount;
-  // (Use replaceAllDtdSubs for subBudgets changes)
+  if (Object.keys($set).length === 0) {
+    // nothing to update — return current (if any)
+    return getPlan(userId, period);
+  }
 
   const doc = await BudgetPlan.findOneAndUpdate(
-    { _id, userId },
-    { $set: allowed },
+    { userId, period },
+    { $set },
     { new: true }
-  )
-    ?.populate?.("dtd.subBudgets.categoryId", "name color");
+  )?.populate?.("dtd.subBudgets.categoryId", "name color");
 
   return doc || null;
-}
-
-/** Delete plan */
-export async function deletePlan(userId, period) {
-  const res = await BudgetPlan.deleteOne({ _id: key(userId, period), userId });
-  return res.deletedCount === 1;
 }
 
 /* -------------------------- DTD sub-budgets -------------------------- */
 
 /** Upsert one DTD sub-budget (add if missing, update if exists) */
-export async function upsertDtdSub(userId, period, categoryId, name, amount) {
-  const _id = key(userId, period);
-
-  // Try to update existing element
-  const existing = await BudgetPlan.findOneAndUpdate(
-    { _id, userId, "dtd.subBudgets.categoryId": categoryId },
-    { $set: { "dtd.subBudgets.$.amount": amount, "dtd.subBudgets.$.name": name } },
-    { new: true }
-  )
-    ?.populate?.("dtd.subBudgets.categoryId", "name color");
-
-  if (existing) return existing;
-
-  // If not present, push a new one; ensure doc exists via upsert
-  const created = await BudgetPlan.findByIdAndUpdate(
-    _id,
+export async function upsertDtdSub(userId, period, categoryId, name, amountCents) {
+  // Try update existing subBudget
+  const updated = await BudgetPlan.findOneAndUpdate(
+    { userId, period, "dtd.subBudgets.categoryId": categoryId },
     {
-      $setOnInsert: { userId, period, savings: { amount: 0 }, commitments: { amount: 0 }, events: { amount: 0 }, dtd: { amount: 0, subBudgets: [] } },
-      $push: { "dtd.subBudgets": { categoryId, name, amount } }
+      $set: {
+        "dtd.subBudgets.$.amountCents": amountCents,
+        ...(name !== undefined ? { "dtd.subBudgets.$.name": name } : {}),
+      },
+    },
+    { new: true }
+  )?.populate?.("dtd.subBudgets.categoryId", "name color");
+  if (updated) return updated;
+
+  // Ensure plan exists, then push new subBudget
+  const created = await BudgetPlan.findOneAndUpdate(
+    { userId, period },
+    {
+      $setOnInsert: {
+        savings: { amountCents: 0, rollover: false, hardCap: false },
+        commitments: { amountCents: 0, rollover: false, hardCap: false },
+        events: { amountCents: 0, rollover: false, hardCap: false },
+        "dtd.amountCents": 0,
+        "dtd.subBudgets": [],
+      },
+      $push: {
+        "dtd.subBudgets": {
+          categoryId,
+          name: name || "",
+          amountCents,
+        },
+      },
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
-  )
-    .populate("dtd.subBudgets.categoryId", "name color");
+  ).populate("dtd.subBudgets.categoryId", "name color");
 
   return created;
 }
 
 /** Remove one DTD sub-budget */
 export async function removeDtdSub(userId, period, categoryId) {
-  const _id = key(userId, period);
   const doc = await BudgetPlan.findOneAndUpdate(
-    { _id, userId },
+    { userId, period },
     { $pull: { "dtd.subBudgets": { categoryId } } },
     { new: true }
-  )
-    ?.populate?.("dtd.subBudgets.categoryId", "name color");
+  )?.populate?.("dtd.subBudgets.categoryId", "name color");
 
   return doc || null;
 }
 
-/** Replace entire subBudgets array */
-export async function replaceAllDtdSubs(userId, period, subBudgets) {
-  const _id = key(userId, period);
-  const doc = await BudgetPlan.findByIdAndUpdate(
-    _id,
+/** Replace entire subBudgets array (expects items already in cents) */
+export async function replaceAllDtdSubs(userId, period, subBudgetsCents) {
+  const doc = await BudgetPlan.findOneAndUpdate(
+    { userId, period },
     {
       $set: {
-        userId,
-        period,
-        "dtd.subBudgets": subBudgets
-      }
+        "dtd.subBudgets": subBudgetsCents,
+      },
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
-  )
-    .populate("dtd.subBudgets.categoryId", "name color");
+  ).populate("dtd.subBudgets.categoryId", "name color");
 
   return doc;
 }
 
-/** Clear all DTD sub-budgets (keep dtd.amount intact) */
+/** Clear all DTD sub-budgets (keep dtd.amountCents intact) */
 export async function clearAllDtdSubs(userId, period) {
-  const _id = key(userId, period);
   const doc = await BudgetPlan.findOneAndUpdate(
-    { _id, userId },
+    { userId, period },
     { $set: { "dtd.subBudgets": [] } },
     { new: true }
-  )
-    ?.populate?.("dtd.subBudgets.categoryId", "name color");
+  )?.populate?.("dtd.subBudgets.categoryId", "name color");
 
   return doc || null;
+}
+
+/** Delete entire plan */
+export async function deletePlan(userId, period) {
+  const res = await BudgetPlan.deleteOne({ userId, period });
+  return res.deletedCount === 1;
 }

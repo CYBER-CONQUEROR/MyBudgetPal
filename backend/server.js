@@ -9,18 +9,23 @@ import bankRoutes from "./bankTransactions/bankRoutes.js";
 import categoryRoutes from "./dayToDayExpenses/categoryRoutes.js";
 import budgetPlanRouter from "./budgetManagement/budgetRoutes.js";
 import eventRoutes from "./eventExpenses/eventRoutes.js";
+import accountRoutes from './AccountManagement/AccountRoutes.js';
+
+
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const DEMO_USER_ID = "u_demo_1";
+const DEMO_USER_ID = new mongoose.Types.ObjectId("000000000000000000000001");
 
 // Middleware
 app.use(cors({ origin: "http://localhost:3000" }));
 app.use(express.json());
 app.use((req, _res, next) => {
-  req.userId = req.header("x-user-id") || DEMO_USER_ID;
+  // if client sends a valid ObjectId, use it; otherwise use demo user
+  const raw = req.header("x-user-id");
+  req.userId = mongoose.isValidObjectId(raw) ? new mongoose.Types.ObjectId(raw) : DEMO_USER_ID;
   next();
 });
 
@@ -34,6 +39,7 @@ app.use("/api/transactions", bankRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/budget", budgetPlanRouter);
 app.use("/api/events", eventRoutes);
+app.use("/api/accounts", accountRoutes);
 
 // 404 fallback
 app.use((req, res) => res.status(404).json({ error: "Not found" }));

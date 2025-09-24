@@ -10,6 +10,7 @@ import SavingsPage from "./pages/SavingsPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import Home from "./pages/Home";
 import BudgetPlanPage from "./pages/BudgetPlanPage";
+import AccountPage from "./pages/bankAccountManagement";
 
 
 const theme = createTheme({
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/income" element={<SalaryPage />} />
             <Route path="/budget" element={<BudgetPlanPage />} />
+            <Route path="/accounts" element={<AccountPage />} />
             <Route path="/commitments" element={<CommitmentsPage />} />
             <Route path="/events" element={<EventsPage />} />
             <Route path="/daily" element={<DtdExpense />} />

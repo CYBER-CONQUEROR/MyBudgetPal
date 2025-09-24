@@ -1,10 +1,11 @@
 // backend/budgetPlan/controller.js
 import * as store from "./budgetStore.js";
+import mongoose from "mongoose";
 
 /* ----------------------------- helpers ----------------------------- */
 
 function ensurePeriod(p) {
-  if (!/^\d{4}-\d{2}$/.test(p || "")) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(p || "")) {
     const err = new Error("Invalid period. Expected 'YYYY-MM'.");
     err.status = 400;
     throw err;
@@ -22,10 +23,87 @@ function ensureAmount(a, field = "amount") {
   return n;
 }
 
+const toCents = (rupees) => Math.round(Number(rupees) * 100);
+const toRupees = (cents) => Number(cents || 0) / 100;
+
 function httpError(res, err) {
   const status = err?.status || 500;
   const msg = err?.message || "Internal Server Error";
   return res.status(status).json({ error: msg });
+}
+
+/** Normalize incoming full plan (in rupees) -> cents payload for store */
+function normalizePlanToCents(body) {
+  const { savings, commitments, events, dtd } = body || {};
+
+  const mod = (m = {}) => ({
+    amountCents:
+      m.amount !== undefined ? toCents(ensureAmount(m.amount, "amount")) : 0,
+    rollover: !!m.rollover,
+    hardCap: !!m.hardCap,
+  });
+
+  const dtdOut = {
+    amountCents:
+      dtd?.amount !== undefined
+        ? toCents(ensureAmount(dtd.amount, "dtd.amount"))
+        : 0,
+    subBudgets: Array.isArray(dtd?.subBudgets)
+      ? dtd.subBudgets.map((s, i) => {
+          if (!s?.categoryId) {
+            const e = new Error(`subBudgets[${i}].categoryId is required`);
+            e.status = 400;
+            throw e;
+          }
+          return {
+            categoryId: s.categoryId,
+            name: s.name || "",
+            amountCents: toCents(ensureAmount(s.amount, `subBudgets[${i}].amount`)),
+          };
+        })
+      : undefined,
+  };
+
+  return {
+    savings: mod(savings),
+    commitments: mod(commitments),
+    events: mod(events),
+    dtd: dtdOut,
+  };
+}
+
+/** Map DB doc (cents) -> API response (rupees) */
+function planOut(doc) {
+  if (!doc) return null;
+  const out = doc.toObject ? doc.toObject({ virtuals: false }) : doc;
+
+  const mapMod = (m = {}) => ({
+    amount: toRupees(m.amountCents || 0),
+    rollover: !!m.rollover,
+    hardCap: !!m.hardCap,
+  });
+
+  return {
+    _id: out._id,
+    userId: out.userId,
+    period: out.period,
+    savings: mapMod(out.savings),
+    commitments: mapMod(out.commitments),
+    events: mapMod(out.events),
+    dtd: {
+      amount: toRupees(out.dtd?.amountCents || 0),
+      subBudgets: (out.dtd?.subBudgets || []).map((s) => ({
+        categoryId: s.categoryId?._id || s.categoryId,
+        // surfaced for UI
+        category: s.categoryId?.name,
+        categoryColor: s.categoryId?.color,
+        name: s.name || "",
+        amount: toRupees(s.amountCents || 0),
+      })),
+    },
+    createdAt: out.createdAt,
+    updatedAt: out.updatedAt,
+  };
 }
 
 /* ------------------------------ Plans ------------------------------ */
@@ -49,7 +127,7 @@ export async function listPlans(req, res) {
     };
 
     const items = await store.listPlans(userId, range, opts);
-    return res.json(items);
+    return res.json(items.map(planOut));
   } catch (err) {
     return httpError(res, err);
   }
@@ -62,7 +140,7 @@ export async function getPlan(req, res) {
     const period = ensurePeriod(req.params.period || req.query.period);
     const doc = await store.getPlan(userId, period);
     if (!doc) return res.status(404).json({ error: "Plan not found" });
-    return res.json(doc);
+    return res.json(planOut(doc));
   } catch (err) {
     return httpError(res, err);
   }
@@ -72,20 +150,17 @@ export async function getPlan(req, res) {
 export async function createPlan(req, res) {
   try {
     const userId = req.userId;
-    const { period, savings, commitments, events, dtd } = req.body || {};
+    const { period } = req.body || {};
     const p = ensurePeriod(period);
 
-    // Basic payload validation (amount-only checks; shape checks are minimal)
-    ensureAmount(savings?.amount, "savings.amount");
-    ensureAmount(commitments?.amount, "commitments.amount");
-    ensureAmount(events?.amount, "events.amount");
-    ensureAmount(dtd?.amount, "dtd.amount");
+    // Validate amounts (rupees) then convert to cents
+    const payloadCents = normalizePlanToCents(req.body);
 
     const exists = await store.getPlan(userId, p);
     if (exists) return res.status(409).json({ error: "Plan already exists for this period" });
 
-    const doc = await store.replacePlan(userId, p, { savings, commitments, events, dtd });
-    return res.status(201).json(doc);
+    const doc = await store.createPlan(userId, p, payloadCents);
+    return res.status(201).json(planOut(doc));
   } catch (err) {
     return httpError(res, err);
   }
@@ -96,16 +171,10 @@ export async function replacePlan(req, res) {
   try {
     const userId = req.userId;
     const period = ensurePeriod(req.params.period);
-    const { savings, commitments, events, dtd } = req.body || {};
 
-    // Optional: validate when provided
-    if (savings?.amount !== undefined) ensureAmount(savings.amount, "savings.amount");
-    if (commitments?.amount !== undefined) ensureAmount(commitments.amount, "commitments.amount");
-    if (events?.amount !== undefined) ensureAmount(events.amount, "events.amount");
-    if (dtd?.amount !== undefined) ensureAmount(dtd.amount, "dtd.amount");
-
-    const doc = await store.replacePlan(userId, period, { savings, commitments, events, dtd });
-    return res.json(doc);
+    const payloadCents = normalizePlanToCents(req.body);
+    const doc = await store.replacePlan(userId, period, payloadCents);
+    return res.json(planOut(doc));
   } catch (err) {
     return httpError(res, err);
   }
@@ -118,15 +187,44 @@ export async function patchPlan(req, res) {
     const period = ensurePeriod(req.params.period);
     const patch = { ...req.body };
 
-    // If amounts are present, validate them
+    // Validate rupees when present
     if (patch.savings?.amount !== undefined) ensureAmount(patch.savings.amount, "savings.amount");
     if (patch.commitments?.amount !== undefined) ensureAmount(patch.commitments.amount, "commitments.amount");
     if (patch.events?.amount !== undefined) ensureAmount(patch.events.amount, "events.amount");
     if (patch.dtd?.amount !== undefined) ensureAmount(patch.dtd.amount, "dtd.amount");
 
-    const doc = await store.patchPlan(userId, period, patch);
+    // Convert to cents
+    const patchCents = {};
+    if (patch.savings) {
+      patchCents.savings = {
+        ...(patch.savings.amount !== undefined ? { amountCents: toCents(patch.savings.amount) } : {}),
+        ...(patch.savings.rollover !== undefined ? { rollover: !!patch.savings.rollover } : {}),
+        ...(patch.savings.hardCap !== undefined ? { hardCap: !!patch.savings.hardCap } : {}),
+      };
+    }
+    if (patch.commitments) {
+      patchCents.commitments = {
+        ...(patch.commitments.amount !== undefined ? { amountCents: toCents(patch.commitments.amount) } : {}),
+        ...(patch.commitments.rollover !== undefined ? { rollover: !!patch.commitments.rollover } : {}),
+        ...(patch.commitments.hardCap !== undefined ? { hardCap: !!patch.commitments.hardCap } : {}),
+      };
+    }
+    if (patch.events) {
+      patchCents.events = {
+        ...(patch.events.amount !== undefined ? { amountCents: toCents(patch.events.amount) } : {}),
+        ...(patch.events.rollover !== undefined ? { rollover: !!patch.events.rollover } : {}),
+        ...(patch.events.hardCap !== undefined ? { hardCap: !!patch.events.hardCap } : {}),
+      };
+    }
+    if (patch.dtd) {
+      patchCents.dtd = {
+        ...(patch.dtd.amount !== undefined ? { amountCents: toCents(patch.dtd.amount) } : {}),
+      };
+    }
+
+    const doc = await store.patchPlan(userId, period, patchCents);
     if (!doc) return res.status(404).json({ error: "Plan not found" });
-    return res.json(doc);
+    return res.json(planOut(doc));
   } catch (err) {
     return httpError(res, err);
   }
@@ -154,10 +252,15 @@ export async function upsertDtdSub(req, res) {
     const { categoryId } = req.params;
     const { amount, name } = req.body || {};
 
+    if (!mongoose.isValidObjectId(categoryId)) {
+      const e = new Error("Invalid categoryId");
+      e.status = 400;
+      throw e;
+    }
     ensureAmount(amount, "amount");
 
-    const doc = await store.upsertDtdSub(userId, period, categoryId, name, amount);
-    return res.json(doc);
+    const doc = await store.upsertDtdSub(userId, period, categoryId, name, toCents(amount));
+    return res.json(planOut(doc));
   } catch (err) {
     return httpError(res, err);
   }
@@ -169,10 +272,15 @@ export async function removeDtdSub(req, res) {
     const userId = req.userId;
     const period = ensurePeriod(req.params.period);
     const { categoryId } = req.params;
+    if (!mongoose.isValidObjectId(categoryId)) {
+      const e = new Error("Invalid categoryId");
+      e.status = 400;
+      throw e;
+    }
 
     const doc = await store.removeDtdSub(userId, period, categoryId);
     if (!doc) return res.status(404).json({ error: "Plan not found" });
-    return res.json(doc);
+    return res.json(planOut(doc));
   } catch (err) {
     return httpError(res, err);
   }
@@ -190,18 +298,22 @@ export async function replaceAllDtdSubs(req, res) {
       err.status = 400;
       throw err;
     }
-    // minimal validation on each item
-    for (const i of subBudgets) {
-      if (!i?.categoryId) {
-        const err = new Error("Each sub budget needs a categoryId");
-        err.status = 400;
-        throw err;
+    const mapped = subBudgets.map((i, idx) => {
+      if (!i?.categoryId || !mongoose.isValidObjectId(i.categoryId)) {
+        const e = new Error(`subBudgets[${idx}].categoryId is invalid`);
+        e.status = 400;
+        throw e;
       }
-      ensureAmount(i.amount, "amount");
-    }
+      ensureAmount(i.amount, `subBudgets[${idx}].amount`);
+      return {
+        categoryId: i.categoryId,
+        name: i.name || "",
+        amountCents: toCents(i.amount),
+      };
+    });
 
-    const doc = await store.replaceAllDtdSubs(userId, period, subBudgets);
-    return res.json(doc);
+    const doc = await store.replaceAllDtdSubs(userId, period, mapped);
+    return res.json(planOut(doc));
   } catch (err) {
     return httpError(res, err);
   }
@@ -214,7 +326,7 @@ export async function clearAllDtdSubs(req, res) {
     const period = ensurePeriod(req.params.period);
     const doc = await store.clearAllDtdSubs(userId, period);
     if (!doc) return res.status(404).json({ error: "Plan not found" });
-    return res.json(doc);
+    return res.json(planOut(doc));
   } catch (err) {
     return httpError(res, err);
   }

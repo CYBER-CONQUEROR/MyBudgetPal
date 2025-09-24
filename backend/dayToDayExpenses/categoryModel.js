@@ -1,12 +1,13 @@
 // models/Category.js
 import mongoose from "mongoose";
-const { Schema } = mongoose;
+const { Schema, Types } = mongoose;
 
 const categorySchema = new Schema(
   {
-    userId: { type: String, required: true, index: true },
+    // IMPORTANT: store as ObjectId to match the rest of your app
+    userId: { type: Types.ObjectId, required: true, index: true },
     name:   { type: String, required: true, trim: true },
-    // optional:
+    // optional
     color:  { type: String, default: "" },
   },
   { timestamps: true }

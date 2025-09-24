@@ -1,27 +1,31 @@
+// routes/expense.routes.js
 import express from "express";
 import {
   getAllExpenses,
+  getExpenseById,
   createExpense,
   updateExpense,
   deleteExpense,
-  getExpenseStats
-} from "./expenseController.js";
+  getExpenseStats,
+} from "./expenseController.js"; // adjust path if needed
 
 const router = express.Router();
 
-// Matches GET /api/expenses
+// List & stats (order matters: /stats before /:id)
 router.get("/", getAllExpenses);
-
-// Matches POST /api/expenses
-router.post("/", createExpense);
-
-// Matches GET /api/expenses/stats - IMPORTANT: Place before /:id
 router.get("/stats", getExpenseStats);
 
-// Matches PUT /api/expenses/:id
-router.put("/:id", updateExpense);
+// Single read
+router.get("/:id", getExpenseById);
 
-// Matches DELETE /api/expenses/:id
+// Create
+router.post("/", createExpense);
+
+// Update (support both PUT & PATCH)
+router.put("/:id", updateExpense);
+router.patch("/:id", updateExpense);
+
+// Delete
 router.delete("/:id", deleteExpense);
 
 export default router;

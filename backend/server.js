@@ -35,7 +35,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Feature mounts
 app.use("/api/incomes", incomeRouter);
 app.use("/api/expenses", expenseRoutes);
-app.use("/api/transactions", bankRoutes);
+app.use("/api/commitments", bankRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/budget", budgetPlanRouter);
 app.use("/api/events", eventRoutes);

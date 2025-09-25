@@ -1,19 +1,13 @@
-import express from "express";
-import {
-  getAllTransactions,
-  getTransactionById,
-  createTransaction,
-  updateTransaction,
-  deleteTransaction
-} from "./bankController.js";
+// routes/commitments.js
+import { Router } from "express";
+import * as c from "./bankController.js";
 
-const router = express.Router();
+const router = Router();
 
-// CRUD routes
-router.get("/", getAllTransactions);
-router.get("/:id", getTransactionById);
-router.post("/", createTransaction);
-router.put("/:id", updateTransaction);
-router.delete("/:id", deleteTransaction);
+router.get("/", c.listCommitments);
+router.get("/:id", c.getCommitment);
+router.post("/", c.createCommitment);
+router.put("/:id", c.updateCommitment);
+router.delete("/:id", c.deleteCommitment);
 
 export default router;

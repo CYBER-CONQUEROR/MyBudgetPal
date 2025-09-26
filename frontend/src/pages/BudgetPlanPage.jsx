@@ -62,9 +62,6 @@ export default function BudgetManagement() {
   const savingsActual = SavingsExpenses.reduce((s, t) => s + Number((t.savedThisMonthCents / 100) || 0), 0);
 
   const barData = buildBarData(budgets, commitmentsActual, dtdActual, eventsActual, savingsActual);
-
-
-
   const canCreateForThisPeriod = isCurrentPeriod;
   const showForecastCard = !plan && isNextOfToday;
   const showCreateButton = !plan && canCreateForThisPeriod;

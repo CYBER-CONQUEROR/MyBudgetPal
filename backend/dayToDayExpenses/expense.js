@@ -1,35 +1,39 @@
 // models/Expense.js
 import mongoose from "mongoose";
-const { Schema } = mongoose;
+const { Schema, Types } = mongoose;
 
-const expenseSchema = new Schema(
+const ExpenseSchema = new Schema(
   {
+    userId:    { type: Types.ObjectId, ref: "User", required: true, index: true },
+    accountId: { type: Types.ObjectId, ref: "Account", required: true, index: true },
+
     title: { type: String, required: [true, "Title is required"], trim: true },
-    amount: { type: Number, required: [true, "Amount is required"], min: [0, "Amount cannot be negative"] },
 
-    // ✅ reference to Category
-    categoryId: { type: Schema.Types.ObjectId, ref: "Category", required: true, index: true },
+    // money in integer cents
+    amountCents: { type: Number, required: [true, "Amount is required"], min: [0, "Amount cannot be negative"] },
 
-    // (optional) denormalized name; OK to keep, just know it can get stale after renames
-    categoryName: { type: String, trim: true, default: "" },
+    // category
+    categoryId:   { type: Types.ObjectId, ref: "Category", required: true, index: true },
+    categoryName: { type: String, trim: true, default: "" }, // denormalized snapshot for fast UI
 
-    description: { type: String, default: "", trim: true },
+    // timing + notes
     date: { type: Date, default: Date.now, required: true },
+    description: { type: String, default: "", trim: true },
 
+    // optional (you already had it)
     paymentMethod: {
       type: String,
-      default: "Cash",
       enum: ["Cash", "Credit Card", "Debit Card", "Bank Transfer", "Mobile Payment"],
     },
-
-    // 🔴 make this required and indexed
-    userId: { type: String, required: true, index: true },
   },
   { timestamps: true }
 );
 
-// helpful for queries
-expenseSchema.index({ userId: 1, date: -1 });
-expenseSchema.index({ userId: 1, categoryId: 1 });
+ExpenseSchema.index({ userId: 1, date: -1 });
+ExpenseSchema.index({ userId: 1, accountId: 1, date: -1 });
+ExpenseSchema.index({ userId: 1, categoryId: 1, date: -1 });
 
-export default mongoose.model("Expense", expenseSchema);
+// keep cents integer
+ExpenseSchema.path("amountCents").validate(Number.isInteger, "amountCents must be an integer (cents).");
+
+export default mongoose.model("Expense", ExpenseSchema);

@@ -1,63 +1,88 @@
 // models/BudgetPlan.js
 import mongoose from "mongoose";
-const { Schema } = mongoose;
+const { Schema, Types } = mongoose;
+
+// Reusable integer-cents field validator
+const centsField = {
+  type: Number,
+  required: true,
+  min: 0,
+  validate: {
+    validator: Number.isInteger,
+    message: "must be integer cents",
+  },
+};
 
 /**
- * Sub-budget for a single Day-to-Day (DTD) category.
- * - categoryId: references the Category doc (keeps categories dynamic)
- * - name: optional snapshot for prettier UI (source of truth still the Category)
- * - amount: the target amount for this category in the month
+ * DTD sub-budget line
+ * - categoryId: Category._id (DTD category)
+ * - name: optional snapshot for nicer UI
+ * - amountCents: planned amount (in cents)
  */
 const DtdSubBudgetSchema = new Schema(
   {
-    categoryId: { type: Schema.Types.ObjectId, ref: "Category", required: true },
-    name:       { type: String, trim: true },
-    amount:     { type: Number, required: true, min: 0 },
+    categoryId: { type: Types.ObjectId, ref: "Category", required: true },
+    name: { type: String, trim: true },
+    amountCents: centsField,
   },
   { _id: false }
 );
 
 /**
- * Reusable structure for module totals (savings, commitments, events).
- * - amount: the target amount for the module in the month
- * - rollover: carry unused budget to next month (default false)
- * - hardCap: block new transactions when exceeded (default false)
+ * Simple budget cap for modules (savings/commitments/events)
+ * - amountCents: planned amount (in cents)
+ * - rollover: carry leftover to next month?
+ * - hardCap: block transactions when exceeded?
  */
 const SoftCapSchema = new Schema(
   {
-    amount:   { type: Number, required: true, min: 0 },
-    rollover: { type: Boolean, default: false }, // always false unless set
-    hardCap:  { type: Boolean, default: false }, // always false unless set
+    amountCents: centsField,
+    rollover: { type: Boolean, default: false },
+    hardCap: { type: Boolean, default: false },
   },
   { _id: false }
 );
 
 /**
- * One document = one user's budget plan for one month (period = "YYYY-MM")
+ * One doc = one user's budget plan for one month (period = "YYYY-MM")
  */
 const BudgetPlanSchema = new Schema(
   {
-    // _id = `${userId}_${period}` for idempotent upserts
-    _id:    { type: String },
+    // IMPORTANT: no custom _id; let Mongo assign ObjectId
+    userId: { type: Types.ObjectId, required: true, index: true },
+    period: {
+      type: String,
+      required: true,
+      index: true,
+      match: [/^\d{4}-(0[1-9]|1[0-2])$/, "Invalid period format (use YYYY-MM)"],
+    },
 
-    userId: { type: String, required: true, index: true },
-    period: { type: String, required: true, index: true }, // "YYYY-MM"
-
-    // module-level budgets
-    savings:     { type: SoftCapSchema, required: true },
+    // Module-level budgets (in cents)
+    savings: { type: SoftCapSchema, required: true },
     commitments: { type: SoftCapSchema, required: true },
-    events:      { type: SoftCapSchema, required: true },
+    events: { type: SoftCapSchema, required: true },
 
-    // Day-to-Day (DTD) budgets
+    // Day-to-Day (DTD)
     dtd: {
-      amount:     { type: Number, required: true, min: 0 },
-      subBudgets: { type: [DtdSubBudgetSchema], default: [] }
+      amountCents: centsField,
+      subBudgets: {
+        type: [DtdSubBudgetSchema],
+        default: [],
+        // App-layer dedupe guard: categoryId must be unique within the array
+        validate: {
+          validator(list) {
+            const ids = list.map((x) => String(x.categoryId));
+            return ids.length === new Set(ids).size;
+          },
+          message: "Duplicate categoryId in dtd.subBudgets",
+        },
+      },
     },
   },
   { timestamps: true }
 );
 
-// prevent duplicates for the same user/period
+// Idempotency: one plan per (userId, period)
 BudgetPlanSchema.index({ userId: 1, period: 1 }, { unique: true });
 
 export default mongoose.model("BudgetPlan", BudgetPlanSchema);

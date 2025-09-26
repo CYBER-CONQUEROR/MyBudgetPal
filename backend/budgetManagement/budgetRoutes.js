@@ -1,80 +1,41 @@
 // backend/budgetPlan/routes.js
 import { Router } from "express";
-import * as ctrl from "./budgetController.js"; // implement these in controller.js
+import * as ctrl from "./budgetController.js";
 
 const router = Router();
 
 /* ----------------------------- Plans (CRUD) ----------------------------- */
 
-/**
- * GET /api/budget/plans
- * Optional query:
- *  - from=YYYY-MM&to=YYYY-MM  (list plans in range)
- *  - limit, skip              (pagination if you want)
- */
+// GET /api/budget/plans?from=YYYY-MM&to=YYYY-MM&limit&skip
 router.get("/plans", ctrl.listPlans);
 
-/**
- * GET /api/budget/plans/:period
- * Returns the plan for a single period (YYYY-MM)
- */
+// GET /api/budget/plans/:period
 router.get("/plans/:period", ctrl.getPlan);
 
-/**
- * POST /api/budget/plans
- * Create a brand-new plan. Body must include:
- *  { period, savings, commitments, events, dtd: { amount, subBudgets? } }
- * Return 409 if a plan for that period already exists.
- */
+// POST /api/budget/plans
 router.post("/plans", ctrl.createPlan);
 
-/**
- * PUT /api/budget/plans/:period
- * Create or replace (idempotent upsert) the entire plan for :period.
- * Body: { savings, commitments, events, dtd: { amount, subBudgets? } }
- */
+// PUT /api/budget/plans/:period
 router.put("/plans/:period", ctrl.replacePlan);
 
-/**
- * PATCH /api/budget/plans/:period
- * Partial update (e.g., just tweak savings.amount or dtd.amount).
- * Body may include any subset of top-level fields.
- */
+// PATCH /api/budget/plans/:period
 router.patch("/plans/:period", ctrl.patchPlan);
 
-/**
- * DELETE /api/budget/plans/:period
- * Remove the entire plan for :period.
- */
+// DELETE /api/budget/plans/:period
 router.delete("/plans/:period", ctrl.deletePlan);
-
 
 /* ------------------------ DTD sub-budgets (CRUD) ------------------------ */
 
-/**
- * PUT /api/budget/plans/:period/dtd/:categoryId
- * Upsert one DTD sub-budget (add if missing, update if exists).
- * Body: { amount, name? }
- */
+// PUT /api/budget/plans/:period/dtd/:categoryId
 router.put("/plans/:period/dtd/:categoryId", ctrl.upsertDtdSub);
 
-/**
- * DELETE /api/budget/plans/:period/dtd/:categoryId
- * Remove one DTD sub-budget.
- */
+// DELETE /api/budget/plans/:period/dtd/:categoryId
 router.delete("/plans/:period/dtd/:categoryId", ctrl.removeDtdSub);
 
-/**
- * PUT /api/budget/plans/:period/dtd
- * Replace the entire DTD subBudgets array.
- * Body: { subBudgets: [{ categoryId, amount, name? }, ...] }
- */
+// PUT /api/budget/plans/:period/dtd
 router.put("/plans/:period/dtd", ctrl.replaceAllDtdSubs);
 
-/**
- * DELETE /api/budget/plans/:period/dtd
- * Clear all DTD sub-budgets (keeps dtd.amount intact).
- */
+// DELETE /api/budget/plans/:period/dtd
 router.delete("/plans/:period/dtd", ctrl.clearAllDtdSubs);
 
 export default router;

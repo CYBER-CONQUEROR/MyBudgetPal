@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { XMarkIcon } from "@heroicons/react/24/outline";
-import { money } from "../../../lib/format";
-import { patchPlan } from "../../../services/api";
+import { money, sanitizeMoney } from "../../../budget/utils";
+import { patchPlan } from "../../../budget/api";
 
 export default function EditOneModal({ period, field, currentAmount, income, otherTotals, onClose, onSaved }) {
   const [val, setVal] = useState(String(currentAmount ?? 0));
@@ -10,18 +10,15 @@ export default function EditOneModal({ period, field, currentAmount, income, oth
 
   const dtd = Number(otherTotals.dtd || 0);
   const othersSum =
-    (field === "savings"     ? 0 : Number(otherTotals.savings || 0)) +
+    (field === "savings" ? 0 : Number(otherTotals.savings || 0)) +
     (field === "commitments" ? 0 : Number(otherTotals.commitments || 0)) +
-    (field === "events"      ? 0 : Number(otherTotals.events || 0)) +
+    (field === "events" ? 0 : Number(otherTotals.events || 0)) +
     dtd;
 
   const nextTotal = Number(val || 0) + othersSum;
   const over = nextTotal > income;
 
-  const label =
-    field === "savings" ? "Savings"
-    : field === "commitments" ? "Bank Commitments"
-    : "Events";
+  const label = field === "savings" ? "Savings" : field === "commitments" ? "Bank Commitments" : "Events";
 
   const save = async () => {
     if (over) return;
@@ -56,7 +53,7 @@ export default function EditOneModal({ period, field, currentAmount, income, oth
                 className="w-full rounded-xl border border-slate-200 pl-12 pr-3 py-2"
                 inputMode="decimal"
                 value={val}
-                onChange={(e) => setVal(e.target.value.replace(/[^\d.]/g, ""))}
+                onChange={(e) => setVal(sanitizeMoney(e.target.value))}
               />
             </div>
 
@@ -67,16 +64,16 @@ export default function EditOneModal({ period, field, currentAmount, income, oth
               </div>
               <div className="px-4 py-2 flex items-center justify-between">
                 <div className="text-slate-600">Projected Total After Change</div>
-                <div className={`font-extrabold ${over ? "text-rose-600" : "text-emerald-600"}`}>
-                  {money(nextTotal)}
-                </div>
+                <div className={`font-extrabold ${over ? "text-rose-600" : "text-emerald-600"}`}>{money(nextTotal)}</div>
               </div>
             </div>
 
             {err && <div className="text-rose-600 text-sm">{err}</div>}
           </div>
           <div className="px-6 py-4 border-t flex items-center justify-end gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-white border hover:bg-slate-50">Cancel</button>
+            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-white border hover:bg-slate-50">
+              Cancel
+            </button>
             <button
               disabled={saving || over}
               onClick={save}

@@ -1,8 +1,8 @@
 import React from "react";
+import { monthLabel } from "../../budget/utils";
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
-import { monthLabel } from "../../lib/date";
 
-export default function PeriodStrip({ period, plan, onPrev, onNext, onChange }) {
+export default function PeriodStrip({ period, plan, onPrev, onNext, onChangeBlocked }) {
   return (
     <div className="card">
       <div className="card-body py-4">
@@ -18,7 +18,7 @@ export default function PeriodStrip({ period, plan, onPrev, onNext, onChange }) 
               <ChevronLeftIcon className="h-5 w-5 text-slate-700" />
               Previous Month
             </button>
-            <input type="month" value={period} onChange={(e) => onChange(e.target.value)} className="input" />
+            <input type="month" value={period} onChange={(e) => onChangeBlocked(e.target.value)} className="input" />
             <button className="btn btn-ghost" onClick={onNext}>
               Next Month
               <ChevronRightIcon className="h-5 w-5 text-slate-700" />

@@ -1,328 +1,1184 @@
-import React, { useState, useEffect } from "react";
+// src/pages/EventsPage.jsx
+import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
-import "../css/EventManagement.css";
 
-function EventManagement() {
-  const [events, setEvents] = useState([]);
-  const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [newEvent, setNewEvent] = useState({
-    name: "",
-    date: "",
-    budget: "",
-    estimated: "",
-    expenses: "",
+/* ===================== AXIOS ===================== */
+const api = axios.create({ baseURL: "http://localhost:4000/api" });
+api.defaults.headers.common["x-user-id"] = "000000000000000000000001";
+
+/* ===================== API wrappers ===================== */
+const Accounts = {
+  list: () => api.get("/accounts", { params: { includeArchived: "false" } }).then((r) => r.data),
+};
+
+const Events = {
+  list: () => api.get("/events").then((r) => r.data),
+  create: (b) => api.post("/events", b).then((r) => r.data),
+  update: (id, b) => api.put(`/events/${id}`, b).then((r) => r.data),
+  remove: (id) => api.delete(`/events/${id}`).then((r) => r.data),
+  fund:   (id, b) => api.post(`/events/${id}/fund`, b).then((r) => r.data),
+  defund: (id, b) => api.post(`/events/${id}/defund`, b).then((r) => r.data),
+  spend:  (id, b) => api.post(`/events/${id}/spend`, b).then((r) => r.data),
+};
+
+const Budget = {
+  getPlan: (period) =>
+    api
+      .get(`/budget/plans/${period}`)
+      .then((r) => r.data)
+      .catch((e) => {
+        if (e?.response?.status === 404) return null;
+        throw e;
+      }),
+};
+
+/* ===================== helpers & small UI bits ===================== */
+const toCents = (n) => Math.round(Number(n || 0) * 100);
+const fromCents = (c) => (Number(c || 0) / 100).toFixed(2);
+const ymd = (x) => (x ? new Date(x).toISOString().slice(0, 10) : "");
+const clamp01 = (n) => Math.max(0, Math.min(1, n));
+const currency = (cents, cur = "LKR") =>
+  new Intl.NumberFormat("en-LK", { style: "currency", currency: cur }).format((cents || 0) / 100);
+
+const thisPeriod = () => {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${d.getFullYear()}-${m}`; // YYYY-MM
+};
+
+function Field({ label, required, children, hint }) {
+  return (
+    <label className="block">
+      <span className="text-sm font-medium text-slate-700 flex items-center gap-1">
+        {label}
+        {required && <span className="text-red-500">*</span>}
+      </span>
+      <div className="mt-1">{children}</div>
+      {hint && <p className="text-xs text-slate-500 mt-1">{hint}</p>}
+    </label>
+  );
+}
+
+function Modal({ open, onClose, title, children, max = "max-w-2xl" }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className={`bg-white rounded-2xl w-full ${max} shadow-xl border border-slate-200`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+          <h3 className="text-lg font-semibold">{title}</h3>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-700 text-xl" aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Bar({ value, max, hard = false }) {
+  const pct = max > 0 ? value / max : 0;
+  const w = `${clamp01(pct) * 100}%`;
+  const color = pct <= 0.85 ? "bg-emerald-500" : pct <= 1 ? "bg-amber-500" : "bg-rose-500";
+  const ring = hard && pct > 1 ? "ring-2 ring-rose-400" : "";
+  return (
+    <div className={`h-2 w-full rounded-full bg-slate-200 overflow-hidden ${ring}`}>
+      <div className={`h-full ${color}`} style={{ width: w }} />
+    </div>
+  );
+}
+
+/* ===================== Create/Edit Event Modal (with budget warnings) ===================== */
+function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
+  const isEdit = !!initial?._id;
+
+  const [f, setF] = useState({
+    _id: null,
+    title: "",
+    mode: "single", // single | itemized
+    primaryAccountId: accounts[0]?._id || "",
+    currency: "LKR",
+    startDate: "",
+    endDate: "",
+    dueDate: "",
     notes: "",
+    target: "", // for single
+    subItems: [{ name: "Gift", target: "" }], // for itemized
   });
-  const [errors, setErrors] = useState({});
-  const [loading, setLoading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [sortKey, setSortKey] = useState("");
-  const [toastMessage, setToastMessage] = useState("");
 
-  const API_URL = "http://localhost:4000/api/events";
+  useEffect(() => {
+    if (!open) return;
+    if (initial) {
+      setF({
+        _id: initial._id,
+        title: initial.title || "",
+        mode: initial.mode || "single",
+        primaryAccountId: initial.primaryAccountId || (accounts[0]?._id || ""),
+        currency: initial.currency || "LKR",
+        startDate: ymd(initial?.dates?.start),
+        endDate: ymd(initial?.dates?.end),
+        dueDate: ymd(initial?.dates?.due),
+        notes: initial.notes || "",
+        target: fromCents(initial.targetCents || 0),
+        subItems:
+          (initial.mode || "single") === "itemized"
+            ? (initial.subItems || []).map((s) => ({ id: s._id, name: s.name, target: fromCents(s.targetCents || 0) }))
+            : [{ name: "Gift", target: "" }],
+      });
+    } else {
+      setF((d) => ({ ...d, primaryAccountId: accounts[0]?._id || "" }));
+    }
+  }, [open, initial, accounts]);
 
-  // Fetch events from backend
-  const fetchEvents = async () => {
-    setLoading(true);
+  const itemizedTotal = useMemo(
+    () => (f.subItems || []).reduce((sum, it) => sum + Number(it.target || 0), 0),
+    [f.subItems]
+  );
+  const targetRupees = f.mode === "single" ? Number(f.target || 0) : itemizedTotal;
+  const targetCents = toCents(targetRupees);
+
+  const selectedAcc = accounts.find((a) => a._id === f.primaryAccountId);
+  const accBalCents = Number(selectedAcc?.balanceCents || 0);
+  const insufficientAccount = targetCents > accBalCents;
+
+  // Budget context for warnings (not blocking on create; blocking happens on FUND)
+  const capC = toCents(Number(budget?.events?.amount || 0));
+  const usedC = Number(budget?._usedEventsCents || 0);
+  const earmarkedC = Number(budget?._earmarkedEventsCents || 0); // funded but unspent
+  const remainingBudgetC = Math.max(0, capC - usedC - earmarkedC);
+
+  const showBudgetWarn = capC > 0 && targetCents > remainingBudgetC;
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (!f.title?.trim()) return alert("Title is required");
+    if (!f.dueDate) return alert("Due date is required");
+    if (!f.primaryAccountId) return alert("Select an account");
+    if (insufficientAccount) return alert("Insufficient funds in the selected account to cover the event target.");
+    // Do NOT block on budget at creation; only warn. Funding modal enforces hardCap.
+    const payload = {
+      title: f.title.trim(),
+      mode: f.mode,
+      primaryAccountId: f.primaryAccountId || null,
+      currency: f.currency || "LKR",
+      dates: {
+        start: f.startDate ? new Date(f.startDate) : null,
+        end: f.endDate ? new Date(f.endDate) : null,
+        due: new Date(f.dueDate),
+      },
+      notes: f.notes?.trim() || "",
+    };
+
+    if (f.mode === "single") {
+      payload.targetCents = toCents(f.target);
+      payload.subItems = [];
+    } else {
+      const subItems = (f.subItems || []).filter((s) => s.name?.trim());
+      payload.subItems = subItems.map((s) => ({ name: s.name.trim(), targetCents: toCents(s.target || 0) }));
+      payload.targetCents = payload.subItems.reduce((a, b) => a + b.targetCents, 0);
+    }
+
+    if (isEdit) await onSave(f._id, payload);
+    else await onSave(null, payload);
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={isEdit ? "Edit Event" : "Add Event"} max="max-w-3xl">
+      <form onSubmit={save} className="grid gap-4">
+        <div className="grid md:grid-cols-2 gap-4">
+          <Field label="Title" required>
+            <input
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.title}
+              onChange={(e) => setF({ ...f, title: e.target.value })}
+              placeholder="Sahan’s Wedding"
+              required
+            />
+          </Field>
+          <Field label="Mode" required>
+            <div className="flex items-center gap-2">
+              {["single", "itemized"].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setF({ ...f, mode: m })}
+                  className={`px-3 py-2 rounded-xl border ${
+                    f.mode === m ? "bg-indigo-600 text-white border-indigo-600" : "bg-white"
+                  }`}
+                >
+                  {m === "single" ? "Single amount" : "Itemized"}
+                </button>
+              ))}
+            </div>
+          </Field>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-4">
+          <Field label="Primary Account" required>
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.primaryAccountId}
+              onChange={(e) => setF({ ...f, primaryAccountId: e.target.value })}
+              required
+            >
+              {accounts.length === 0 ? (
+                <option value="">No accounts found</option>
+              ) : (
+                accounts.map((a) => (
+                  <option key={a._id} value={a._id}>
+                    {a.name} ({a.type}) — {currency(a.balanceCents, a.currency || "LKR")}
+                  </option>
+                ))
+              )}
+            </select>
+            {selectedAcc && (
+              <p className="text-xs text-slate-500 mt-1">Available: {currency(selectedAcc.balanceCents, selectedAcc.currency || "LKR")}</p>
+            )}
+          </Field>
+          <Field label="Currency">
+            <input
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.currency}
+              onChange={(e) => setF({ ...f, currency: e.target.value.toUpperCase() })}
+              placeholder="LKR"
+            />
+          </Field>
+          <Field label="Due date" required>
+            <input
+              type="date"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.dueDate}
+              onChange={(e) => setF({ ...f, dueDate: e.target.value })}
+              required
+            />
+          </Field>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <Field label="Start date">
+            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
+          </Field>
+          <Field label="End date">
+            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} />
+          </Field>
+        </div>
+
+        {f.mode === "single" ? (
+          <Field label="Target amount" required>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.target}
+              onChange={(e) => setF({ ...f, target: e.target.value })}
+              placeholder="15000.00"
+              required
+            />
+          </Field>
+        ) : (
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-slate-700">Sub-items</span>
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded-xl border"
+                onClick={() => setF({ ...f, subItems: [...f.subItems, { name: "", target: "" }] })}
+              >
+                + Add
+              </button>
+            </div>
+            {f.subItems.map((s, i) => (
+              <div key={s.id || i} className="grid grid-cols-12 gap-2">
+                <input
+                  className="col-span-7 rounded-xl border border-slate-300 px-3 py-2"
+                  placeholder="Name (e.g., Gift)"
+                  value={s.name}
+                  onChange={(e) => {
+                    const x = [...f.subItems];
+                    x[i].name = e.target.value;
+                    setF({ ...f, subItems: x });
+                  }}
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  className="col-span-4 rounded-xl border border-slate-300 px-3 py-2"
+                  placeholder="0.00"
+                  value={s.target}
+                  onChange={(e) => {
+                    const x = [...f.subItems];
+                    x[i].target = e.target.value;
+                    setF({ ...f, subItems: x });
+                  }}
+                />
+                <button
+                  type="button"
+                  className="col-span-1 rounded-xl border"
+                  onClick={() => setF({ ...f, subItems: f.subItems.filter((_, j) => j !== i) })}
+                  title="Remove"
+                >
+                  −
+                </button>
+              </div>
+            ))}
+            <div className="text-right text-sm text-slate-600">Total: {currency(toCents(itemizedTotal), f.currency)}</div>
+          </div>
+        )}
+
+        {/* Account balance guard (blocks Save) */}
+        {selectedAcc && targetCents > 0 && targetCents > (selectedAcc.balanceCents || 0) && (
+          <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2">
+            Insufficient funds in <b>{selectedAcc.name}</b>. Needed {currency(targetCents, f.currency)}, available{" "}
+            {currency(selectedAcc.balanceCents, selectedAcc.currency || "LKR")}.
+          </div>
+        )}
+
+        {/* Budget warning (warn-only on create) */}
+        {showBudgetWarn && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
+            Heads up: This event’s target ({currency(targetCents, f.currency)}) exceeds your remaining Events budget for {budget?.period}.
+          </div>
+        )}
+
+        <Field label="Notes">
+          <textarea
+            rows={3}
+            className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            value={f.notes}
+            onChange={(e) => setF({ ...f, notes: e.target.value })}
+            placeholder="Any details…"
+          />
+        </Field>
+
+        <div className="flex items-center gap-3 pt-2">
+          <button
+            type="submit"
+            className={`px-4 py-2 rounded-xl text-white ${
+              insufficientAccount ? "bg-slate-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"
+            }`}
+            disabled={insufficientAccount}
+          >
+            Save
+          </button>
+          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ===================== Fund (enforces budget cap) ===================== */
+function FundModal({ open, onClose, onSave, accounts, event, budget }) {
+  const [accountId, setAccountId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(ymd(new Date()));
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
+    setAmount("");
+    setDate(ymd(new Date()));
+    setNote("");
+  }, [open, event, accounts]);
+
+  const selectedAcc = accounts.find((a) => a._id === accountId);
+  const amountCents = toCents(amount);
+
+  // Target remaining for this event
+  const remainingTargetCents = Math.max(0, (event?.targetCents || 0) - (event?.fundedCents || 0));
+  const insufficientAccount = (selectedAcc?.balanceCents || 0) < amountCents;
+  const overEventTarget = amountCents > remainingTargetCents;
+
+  // Budget hard/soft cap check (Budget = used(spent) + earmarked(unspent funding))
+  const capC = toCents(Number(budget?.events?.amount || 0));
+  const usedC = Number(budget?._usedEventsCents || 0);
+  const earmarkedC = Number(budget?._earmarkedEventsCents || 0);
+  const remainingBudgetC = Math.max(0, capC - usedC - earmarkedC);
+
+  const overBudget = amountCents > remainingBudgetC && capC > 0;
+  const hardCap = !!budget?.events?.hardCap;
+
+  const maxAllowedByAccount = selectedAcc?.balanceCents || 0;
+  const maxAllowedByEvent = remainingTargetCents;
+  const maxAllowedByBudget = hardCap ? remainingBudgetC : Infinity;
+  const maxAllowed = Math.min(maxAllowedByAccount, maxAllowedByEvent, maxAllowedByBudget);
+  const maxAllowedRupees = (maxAllowed / 100).toFixed(2);
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Fund: ${event?.title || ""}`}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (insufficientAccount || overEventTarget || (hardCap && overBudget)) return;
+          await onSave({
+            accountId,
+            amountCents,
+            date: date ? new Date(date) : new Date(),
+            note: note?.trim() || "",
+          });
+        }}
+        className="grid gap-4"
+      >
+        <Field label="From Account" required>
+          <select
+            className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value)}
+            required
+          >
+            {accounts.map((a) => (
+              <option key={a._id} value={a._id}>
+                {a.name} — {currency(a.balanceCents, a.currency || "LKR")}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <div className="grid md:grid-cols-3 gap-4">
+          <Field
+            label="Amount"
+            required
+            hint={`Max: ${currency(maxAllowed, event?.currency || "LKR")}`}
+          >
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max={maxAllowedRupees}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              required
+            />
+          </Field>
+          <Field label="Date" required>
+            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={date} onChange={(e) => setDate(e.target.value)} />
+          </Field>
+          <Field label="Note">
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional" />
+          </Field>
+        </div>
+
+        {overEventTarget && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
+            You’re trying to fund more than this event’s remaining target. Remaining: {currency(remainingTargetCents, event?.currency || "LKR")}.
+          </div>
+        )}
+        {insufficientAccount && (
+          <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2">
+            Not enough balance in <b>{selectedAcc?.name || "account"}</b>.
+          </div>
+        )}
+        {!hardCap && overBudget && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
+            This would exceed the remaining Events budget for {budget?.period}. You can still proceed (no hard cap).
+          </div>
+        )}
+        {hardCap && overBudget && (
+          <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2">
+            Events budget is a <b>hard cap</b> this month. You can fund up to {currency(remainingBudgetC, event?.currency || "LKR")}.
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 pt-2">
+          <button
+            type="submit"
+            className={`px-4 py-2 rounded-xl text-white ${
+              insufficientAccount || overEventTarget || (hardCap && overBudget)
+                ? "bg-slate-400 cursor-not-allowed"
+                : "bg-emerald-600 hover:bg-emerald-700"
+            }`}
+            disabled={insufficientAccount || overEventTarget || (hardCap && overBudget)}
+          >
+            Add Funds
+          </button>
+          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ===================== Remove Funds (Defund) ===================== */
+function DefundModal({ open, onClose, onSave, accounts, event }) {
+  const [accountId, setAccountId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(ymd(new Date()));
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
+    setAmount("");
+    setDate(ymd(new Date()));
+    setNote("");
+  }, [open, event, accounts]);
+
+  // Only defundable = funded - spent
+  const refundableCents = Math.max(0, (event?.fundedCents || 0) - (event?.spentCents || 0));
+  const amountCents = toCents(amount);
+  const overRefundable = amountCents > refundableCents;
+  const maxRefundRupees = (refundableCents / 100).toFixed(2);
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Remove Funds: ${event?.title || ""}`}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (overRefundable || refundableCents <= 0) return;
+          await onSave({
+            accountId,
+            amountCents,
+            date: date ? new Date(date) : new Date(),
+            note: note?.trim() || "",
+          });
+        }}
+        className="grid gap-4"
+      >
+        <Field label="Return to Account" required>
+          <select
+            className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value)}
+            required
+          >
+            {accounts.map((a) => (
+              <option key={a._id} value={a._id}>
+                {a.name} — {currency(a.balanceCents, a.currency || "LKR")}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <div className="grid md:grid-cols-3 gap-4">
+          <Field label="Amount" required hint={`Refundable: ${currency(refundableCents, event?.currency || "LKR")}`}>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max={maxRefundRupees}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              required
+            />
+          </Field>
+          <Field label="Date" required>
+            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={date} onChange={(e) => setDate(e.target.value)} />
+          </Field>
+          <Field label="Note">
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional" />
+          </Field>
+        </div>
+
+        {overRefundable && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
+            You can only remove up to what’s unspent. Refundable: {currency(refundableCents, event?.currency || "LKR")}.
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 pt-2">
+          <button
+            type="submit"
+            className={`px-4 py-2 rounded-xl text-white ${
+              overRefundable || refundableCents <= 0 ? "bg-slate-400 cursor-not-allowed" : "bg-amber-600 hover:bg-amber-700"
+            }`}
+            disabled={overRefundable || refundableCents <= 0}
+          >
+            Remove Funds
+          </button>
+          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ===================== Spend (blocks > funded- spent) ===================== */
+function SpendModal({ open, onClose, onSave, accounts, event }) {
+  const [accountId, setAccountId] = useState("");
+  const [subItemId, setSubItemId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [merchant, setMerchant] = useState("");
+  const [date, setDate] = useState(ymd(new Date()));
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
+    setSubItemId("");
+    setAmount("");
+    setMerchant("");
+    setDate(ymd(new Date()));
+    setNote("");
+  }, [open, event, accounts]);
+
+  const remainingFundedCents = Math.max(0, (event?.fundedCents || 0) - (event?.spentCents || 0));
+  const amountCents = toCents(amount);
+  const overAvailable = amountCents > remainingFundedCents;
+  const maxSpendRupees = (remainingFundedCents / 100).toFixed(2);
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Spend for: ${event?.title || ""}`}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (overAvailable) return;
+          await onSave({
+            accountId,
+            subItemId: subItemId || null,
+            amountCents: toCents(amount),
+            merchant: merchant?.trim() || "",
+            date: date ? new Date(date) : new Date(),
+            note: note?.trim() || "",
+          });
+        }}
+        className="grid gap-4"
+      >
+        <div className="grid md:grid-cols-2 gap-4">
+          <Field label="From Account" required>
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              required
+            >
+              {accounts.map((a) => (
+                <option key={a._id} value={a._id}>
+                  {a.name} — {currency(a.balanceCents, a.currency || "LKR")}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {event?.mode === "itemized" && (
+            <Field label="Sub-item">
+              <select
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                value={subItemId}
+                onChange={(e) => setSubItemId(e.target.value)}
+              >
+                <option value="">(none)</option>
+                {(event?.subItems || []).map((s) => (
+                  <option key={s._id || s.name} value={s._id || s.name}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-4">
+          <Field label="Amount" required hint={`Available: ${currency(remainingFundedCents, event?.currency || "LKR")}`}>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max={maxSpendRupees}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              required
+            />
+          </Field>
+          <Field label="Merchant">
+            <input
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={merchant}
+              onChange={(e) => setMerchant(e.target.value)}
+              placeholder="e.g., ODEL"
+            />
+          </Field>
+          <Field label="Date" required>
+            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={date} onChange={(e) => setDate(e.target.value)} />
+          </Field>
+        </div>
+
+        {overAvailable && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
+            You can’t spend more than what’s funded. Available: {currency(remainingFundedCents, event?.currency || "LKR")}.
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 pt-2">
+          <button
+            type="submit"
+            className={`px-4 py-2 rounded-xl text-white ${
+              overAvailable ? "bg-slate-400 cursor-not-allowed" : "bg-rose-600 hover:bg-rose-700"
+            }`}
+            disabled={overAvailable}
+          >
+            Add Expense
+          </button>
+          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ===================== Event Card ===================== */
+function EventCard({ ev, onEdit, onFund, onDefund, onSpend, onDelete }) {
+  const fundedPct = (ev.targetCents || 0) > 0 ? Math.round(((ev.fundedCents || 0) / ev.targetCents) * 100) : 0;
+  const spentPct = (ev.targetCents || 0) > 0 ? Math.round(((ev.spentCents || 0) / ev.targetCents) * 100) : 0;
+
+  const hasSpend = (ev.spentCents || 0) > 0;
+  const refundableCents = Math.max(0, (ev.fundedCents || 0) - (ev.spentCents || 0));
+  const canDefund = refundableCents > 0;
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between mb-2">
+        <div>
+          <div className="text-lg font-semibold">{ev.title}</div>
+          <div className="text-xs text-slate-500">
+            {ev.mode === "single" ? "Single amount" : "Itemized"} •{" "}
+            {ev?.dates?.due ? `Due ${new Date(ev.dates.due).toLocaleDateString()}` : "No due date"}
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-xs text-slate-500">Target</div>
+          <div className="font-semibold">{currency(ev.targetCents, ev.currency || "LKR")}</div>
+        </div>
+      </div>
+
+      <div className="grid gap-2">
+        <div>
+          <div className="flex justify-between text-xs">
+            <span>Funded</span>
+            <span>
+              {currency(ev.fundedCents, ev.currency)} • {fundedPct}%
+            </span>
+          </div>
+          <Bar value={ev.fundedCents || 0} max={ev.targetCents || 1} />
+        </div>
+        <div>
+          <div className="flex justify-between text-xs">
+            <span>Spent</span>
+            <span>
+              {currency(ev.spentCents, ev.currency)} • {spentPct}%
+            </span>
+          </div>
+          <Bar value={ev.spentCents || 0} max={ev.targetCents || 1} />
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white" onClick={() => onFund(ev)}>
+          + Fund
+        </button>
+        {canDefund && (
+          <button className="px-3 py-1.5 rounded-xl bg-amber-600 text-white" onClick={() => onDefund(ev)}>
+            Remove Funds
+          </button>
+        )}
+        <button className="px-3 py-1.5 rounded-xl bg-rose-600 text-white" onClick={() => onSpend(ev)}>
+          + Spend
+        </button>
+        <button className="px-3 py-1.5 rounded-xl border" onClick={() => onEdit(ev)}>
+          Edit
+        </button>
+
+        {/* Delete: hide if any spend; disable if funded > 0 */}
+        {(ev.spentCents || 0) === 0 && (
+          <button
+            className={`px-3 py-1.5 rounded-xl border ${
+              ev.fundedCents > 0 ? "border-slate-300 text-slate-400 cursor-not-allowed" : "border-red-300 text-red-600"
+            }`}
+            onClick={() => (ev.fundedCents > 0 ? null : onDelete(ev))}
+            disabled={ev.fundedCents > 0}
+            title={ev.fundedCents > 0 ? "Remove funds first to delete" : "Delete"}
+          >
+            Delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ===================== Page ===================== */
+export default function EventsPage() {
+  const [accounts, setAccounts] = useState([]);
+  const [items, setItems] = useState([]);
+
+  // Budget (current period)
+  const period = thisPeriod();
+  const [plan, setPlan] = useState(null);
+
+  const [filters, setFilters] = useState({ q: "", mode: "", accountId: "" });
+  const [err, setErr] = useState("");
+
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const [funding, setFunding] = useState(null);
+  const [defunding, setDefunding] = useState(null);
+  const [spending, setSpending] = useState(null);
+
+  const load = async () => {
+    setErr("");
     try {
-      const response = await axios.get(API_URL);
-      setEvents(response.data);
-    } catch (err) {
-      console.error("Error fetching events:", err);
-    } finally {
-      setLoading(false);
+      const [acc, evs, bp] = await Promise.all([Accounts.list(), Events.list(), Budget.getPlan(period)]);
+      setAccounts(acc || []);
+      setItems(evs || []);
+      setPlan(bp); // could be null
+    } catch (e) {
+      setErr(e?.response?.data?.detail || e?.message || "Failed to load");
     }
   };
 
   useEffect(() => {
-    fetchEvents();
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Validate form inputs
-  const validateForm = () => {
-    const errs = {};
-    if (!newEvent.name) errs.name = "Event name is required.";
-    if (!newEvent.date) errs.date = "Event date is required.";
-    if (!newEvent.budget || isNaN(Number(newEvent.budget)))
-      errs.budget = "Valid budget is required.";
-    if (newEvent.estimated && isNaN(Number(newEvent.estimated)))
-      errs.estimated = "Estimated expenses must be a number.";
-    if (newEvent.expenses && isNaN(Number(newEvent.expenses)))
-      errs.expenses = "Actual expenses must be a number.";
-    return errs;
-  };
+  // ============ Budget usage model ============
+  // We approximate "module spend this month" as total event spend (since backend doesn't expose per-month breakdown).
+  // Earmarked = funded - spent (total). Remaining = cap - used - earmarked.
+  const usedEventsCents = useMemo(
+    () => items.reduce((sum, e) => sum + Number(e.spentCents || 0), 0),
+    [items]
+  );
+  const earmarkedEventsCents = useMemo(
+    () => items.reduce((sum, e) => sum + Math.max(0, Number(e.fundedCents || 0) - Number(e.spentCents || 0)), 0),
+    [items]
+  );
 
-  // Add or update event
-  const handleAddOrUpdateEvent = async () => {
-    const validationErrors = validateForm();
-    if (Object.keys(validationErrors).length > 0) {
-      setErrors(validationErrors);
-      return;
-    }
-
-    const eventObj = {
-      ...newEvent,
-      budget: parseFloat(newEvent.budget),
-      estimated: parseFloat(newEvent.estimated) || 0,
-      expenses: parseFloat(newEvent.expenses) || 0,
+  const planWithUsage = useMemo(() => {
+    if (!plan) return null;
+    return {
+      ...plan,
+      _usedEventsCents: usedEventsCents,
+      _earmarkedEventsCents: earmarkedEventsCents,
     };
+  }, [plan, usedEventsCents, earmarkedEventsCents]);
 
-    console.log("Submitting event:", eventObj); // Debug: check payload
+  const capR = Number(plan?.events?.amount || 0);
+  const capC = toCents(capR);
+  const usedR = usedEventsCents / 100;
+  const earmarkedR = earmarkedEventsCents / 100;
+  const remainingC = Math.max(0, capC - usedEventsCents - earmarkedEventsCents);
 
+  const onSaveEvent = async (id, body) => {
     try {
-      if (editingId) {
-        await axios.put(`${API_URL}/${editingId}`, eventObj);
-        showToast("Event updated successfully!");
+      if (id) {
+        const updated = await Events.update(id, body);
+        setItems((prev) => prev.map((x) => (x._id === id ? updated : x)));
       } else {
-        await axios.post(API_URL, eventObj);
-        showToast("Event added successfully!");
+        const created = await Events.create(body);
+        setItems((prev) => [created, ...prev]);
       }
-      fetchEvents();
-      setShowForm(false);
-      setEditingId(null);
-      setNewEvent({ name: "", date: "", budget: "", estimated: "", expenses: "", notes: "" });
-      setErrors({});
-    } catch (error) {
-      console.error("Error saving event:", error);
-      showToast("Error saving event!");
+      setOpen(false);
+      setEditing(null);
+    } catch (e) {
+      alert(e?.response?.data?.detail || e?.message || "Save failed");
     }
   };
 
-  // Delete event
-  const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this event?")) return;
+  const onDeleteEvent = async (ev) => {
+    if (!window.confirm(`Delete event "${ev.title}"?`)) return;
     try {
-      await axios.delete(`${API_URL}/${id}`);
-      fetchEvents();
-      showToast("Event deleted successfully!");
-    } catch (error) {
-      console.error("Error deleting event:", error);
-      showToast("Error deleting event!");
+      await Events.remove(ev._id);
+      setItems((prev) => prev.filter((x) => x._id !== ev._id));
+    } catch (e) {
+      alert(e?.response?.data?.detail || e?.message || "Delete failed");
     }
   };
 
-  // Edit event
-  const handleEdit = (event) => {
-    setNewEvent({ ...event });
-    setEditingId(event._id);
-    setShowForm(true);
+  const onFundEvent = async (payload) => {
+    try {
+      const data = await Events.fund(funding._id, payload);
+      const updatedEvent = data?.event || data;
+      setItems((prev) => prev.map((x) => (x._id === updatedEvent._id ? updatedEvent : x)));
+      const acc = await Accounts.list();
+      setAccounts(acc || []);
+      setFunding(null);
+      // refresh plan usage (earmarked changes)
+      const bp = await Budget.getPlan(period);
+      setPlan(bp);
+    } catch (e) {
+      alert(e?.response?.data?.detail || e?.message || "Funding failed");
+    }
   };
 
-  // Toast messages
-  const showToast = (message) => {
-    setToastMessage(message);
-    setTimeout(() => setToastMessage(""), 3000);
+  const onDefundEvent = async (payload) => {
+    try {
+      const data = await Events.defund(defunding._id, payload);
+      const updatedEvent = data?.event || data;
+      setItems((prev) => prev.map((x) => (x._id === updatedEvent._id ? updatedEvent : x)));
+      const acc = await Accounts.list();
+      setAccounts(acc || []);
+      setDefunding(null);
+      const bp = await Budget.getPlan(period);
+      setPlan(bp);
+    } catch (e) {
+      alert(e?.response?.data?.detail || e?.message || "Remove funds failed");
+    }
   };
 
-  // Filter & sort events
-  const filteredEvents = events
-    .filter(
-      (e) =>
-        e.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (e.notes && e.notes.toLowerCase().includes(searchTerm.toLowerCase()))
-    )
-    .sort((a, b) => {
-      if (!sortKey) return 0;
-      if (sortKey === "date") return new Date(a.date) - new Date(b.date);
-      if (sortKey === "budget") return a.budget - b.budget;
-      if (sortKey === "expenses") return a.expenses - b.expenses;
-      return 0;
-    });
-
-  const totalBudget = events.reduce((sum, e) => sum + e.budget, 0);
-  const totalExpenses = events.reduce((sum, e) => sum + e.expenses, 0);
-
-  // Export PDF
-  const exportPDF = () => {
-    const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("Event Expenses Report", 14, 22);
-    doc.setFontSize(12);
-    doc.setTextColor(100);
-
-    const tableColumn = ["Name", "Date", "Budget", "Estimated", "Expenses", "Notes"];
-    const tableRows = [];
-
-    events.forEach((event) => {
-      tableRows.push([
-        event.name,
-        new Date(event.date).toLocaleDateString(),
-        `Rs. ${event.budget}`,
-        `Rs. ${event.estimated}`,
-        `Rs. ${event.expenses}`,
-        event.notes || "",
-      ]);
-    });
-
-    autoTable(doc, {
-      head: [tableColumn],
-      body: tableRows,
-      startY: 30,
-      theme: "grid",
-    });
-
-    doc.save("event_expenses.pdf");
+  const onSpendEvent = async (payload) => {
+    try {
+      const data = await Events.spend(spending._id, payload);
+      const updatedEvent = data?.event || data;
+      setItems((prev) => prev.map((x) => (x._id === updatedEvent._id ? updatedEvent : x)));
+      setSpending(null);
+      const bp = await Budget.getPlan(period);
+      setPlan(bp);
+    } catch (e) {
+      alert(e?.response?.data?.detail || e?.message || "Spending failed");
+    }
   };
+
+  const filtered = useMemo(() => {
+    const q = filters.q.toLowerCase();
+    return items.filter((e) => {
+      const okQ = !q || [e.title, e.notes].some((s) => (s || "").toLowerCase().includes(q));
+      const okMode = !filters.mode || e.mode === filters.mode;
+      const okAcc = !filters.accountId || e.primaryAccountId === filters.accountId;
+      return okQ && okMode && okAcc;
+    });
+  }, [items, filters]);
 
   return (
-    <>
-      <div className="container">
-        <h1>🎉 Event Expense Management</h1>
-
-        <div className="summary">
-          <div className="summary-card">
-            <h3>Total Events</h3>
-            <p>{events.length}</p>
+    <div className="min-h-screen bg-slate-50 py-8">
+      <div className="mx-auto max-w-6xl px-4">
+        <header className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">Events</h1>
+            <p className="text-slate-500 text-sm">
+              Single-amount or itemized events. Fund from accounts, remove unused funds, and record spending.
+            </p>
           </div>
-          <div className="summary-card">
-            <h3>Total Budget</h3>
-            <p>Rs. {totalBudget}</p>
+          <div className="flex items-center gap-2">
+            <button className="px-3 py-2 rounded-xl border" onClick={load}>
+              Refresh
+            </button>
+            <button
+              className="px-4 py-2 rounded-xl bg-indigo-600 text-white"
+              onClick={() => {
+                setEditing(null);
+                setOpen(true);
+              }}
+            >
+              + Create Event
+            </button>
           </div>
-          <div className="summary-card">
-            <h3>Total Expenses</h3>
-            <p>Rs. {totalExpenses}</p>
-          </div>
-          <div className="summary-card">
-            <h3>Remaining Budget</h3>
-            <p>Rs. {totalBudget - totalExpenses}</p>
-          </div>
-        </div>
+        </header>
 
-        <div className="controls">
-          <input
-            type="text"
-            placeholder="🔍 Search..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-          <div className="sort-buttons">
-            <button onClick={() => setSortKey("date")}>Sort by Date</button>
-            <button onClick={() => setSortKey("budget")}>Sort by Budget</button>
-            <button onClick={() => setSortKey("expenses")}>Sort by Expenses</button>
-            <button onClick={() => setSortKey("")}>Clear Sort</button>
-          </div>
-        </div>
+        {/* ---------- Budget Overview (current month) ---------- */}
+        <section className="mb-6">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-medium">
+                Events Budget — <span className="text-slate-600">{period}</span>
+              </div>
+              {plan?.events?.hardCap && (
+                <span className="px-2 py-0.5 rounded-full text-xs bg-rose-100 text-rose-700">Hard Cap</span>
+              )}
+            </div>
 
-        <button
-          className="add-event-btn"
-          onClick={() => {
-            setShowForm(true);
-            setEditingId(null);
-          }}
-        >
-          ➕ Add Event
-        </button>
-        <button className="add-event-btn" onClick={exportPDF}>
-          📄 Export PDF
-        </button>
-
-        {showForm && (
-          <div className="form-popup">
-            <div className="form-card">
-              <h2>{editingId ? "Edit Event" : "Add New Event"}</h2>
-
-              <input
-                type="text"
-                placeholder="Event Name"
-                value={newEvent.name}
-                onChange={(e) => setNewEvent({ ...newEvent, name: e.target.value })}
-              />
-              {errors.name && <span className="error">{errors.name}</span>}
-
-              <input
-                type="date"
-                value={newEvent.date}
-                onChange={(e) => setNewEvent({ ...newEvent, date: e.target.value })}
-              />
-              {errors.date && <span className="error">{errors.date}</span>}
-
-              <input
-                type="number"
-                placeholder="Budget (Rs.)"
-                value={newEvent.budget}
-                onChange={(e) => setNewEvent({ ...newEvent, budget: e.target.value })}
-              />
-              {errors.budget && <span className="error">{errors.budget}</span>}
-
-              <input
-                type="number"
-                placeholder="Estimated Expenses (Rs.)"
-                value={newEvent.estimated}
-                onChange={(e) => setNewEvent({ ...newEvent, estimated: e.target.value })}
-              />
-              {errors.estimated && <span className="error">{errors.estimated}</span>}
-
-              <input
-                type="number"
-                placeholder="Actual Expenses (Rs.)"
-                value={newEvent.expenses}
-                onChange={(e) => setNewEvent({ ...newEvent, expenses: e.target.value })}
-              />
-              {errors.expenses && <span className="error">{errors.expenses}</span>}
-
-              <textarea
-                placeholder="Notes"
-                value={newEvent.notes}
-                onChange={(e) => setNewEvent({ ...newEvent, notes: e.target.value })}
-              ></textarea>
-
-              <div className="form-actions">
-                <button onClick={handleAddOrUpdateEvent}>
-                  ✅ {editingId ? "Update" : "Save"}
-                </button>
-                <button
-                  className="cancel-btn"
-                  onClick={() => {
-                    setShowForm(false);
-                    setErrors({});
-                    setEditingId(null);
-                  }}
-                >
-                  ❌ Cancel
-                </button>
+            <div className="grid md:grid-cols-4 gap-4 mb-3">
+              <div>
+                <div className="text-xs text-slate-500">Budget</div>
+                <div className="text-slate-900 font-semibold">{currency(capC)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Used (spent)</div>
+                <div className="text-slate-900 font-semibold">{currency(usedEventsCents)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Earmarked (unspent funds)</div>
+                <div className="text-slate-900 font-semibold">{currency(earmarkedEventsCents)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Remaining</div>
+                <div className="text-slate-900 font-semibold">{currency(remainingC)}</div>
               </div>
             </div>
-          </div>
-        )}
 
-        <div className="events-grid">
-          {filteredEvents.map((event) => {
-            const spentPercentage = Math.min(Math.round((event.expenses / event.budget) * 100), 150);
-            const barClass = event.expenses > event.budget ? "budget-bar-red" : "budget-bar-green";
+            <Bar value={usedEventsCents + earmarkedEventsCents} max={capC} hard={!!plan?.events?.hardCap} />
 
-            return (
-              <div className={`event-card ${event.expenses > event.budget ? "overspent" : ""}`} key={event._id}>
-                <h3>{event.name}</h3>
-                <p>📅 {new Date(event.date).toLocaleDateString()}</p>
-                <p>💰 Budget: Rs. {event.budget}</p>
-                <p>📊 Estimated: Rs. {event.estimated}</p>
-                <p>💸 Expenses: Rs. {event.expenses}</p>
-                {event.notes && <p>📝 Notes: {event.notes}</p>}
-
-                <div className="budget-bar-container">
-                  <div className={`budget-bar ${barClass}`} style={{ width: `${spentPercentage}%` }}>
-                    <span className="bar-label">{spentPercentage}%</span>
-                  </div>
-                </div>
-
-                <div className="event-actions">
-                  <button onClick={() => handleEdit(event)}>✏️ Edit</button>
-                  <button onClick={() => handleDelete(event._id)}>🗑️ Delete</button>
-                </div>
+            {!plan && (
+              <div className="mt-2 text-xs text-slate-600">
+                No budget plan found for {period}. Create one under <b>Budget &gt; Plans</b> to track limits.
               </div>
-            );
-          })}
+            )}
+          </div>
+        </section>
+
+        {/* Filters */}
+        <div className="grid md:grid-cols-4 gap-3 mb-6">
+          <Field label="Search">
+            <input
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              placeholder="title / notes"
+              value={filters.q}
+              onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+            />
+          </Field>
+          <Field label="Mode">
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={filters.mode}
+              onChange={(e) => setFilters({ ...filters, mode: e.target.value })}
+            >
+              <option value="">All</option>
+              <option value="single">Single</option>
+              <option value="itemized">Itemized</option>
+            </select>
+          </Field>
+          <Field label="Account">
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={filters.accountId}
+              onChange={(e) => setFilters({ ...filters, accountId: e.target.value })}
+            >
+              <option value="">All</option>
+              {accounts.map((a) => (
+                <option key={a._id} value={a._id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </Field>
         </div>
+
+        {/* Error */}
+        {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-red-700 text-sm">{err}</div>}
+
+        {/* Cards */}
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.length === 0 ? (
+            <div className="text-slate-500">No events yet. Click <b>Create Event</b> to get started.</div>
+          ) : (
+            filtered.map((ev) => (
+              <EventCard
+                key={ev._id}
+                ev={ev}
+                onEdit={(x) => {
+                  setEditing(x);
+                  setOpen(true);
+                }}
+                onFund={(x) => setFunding(x)}
+                onDefund={(x) => setDefunding(x)}
+                onSpend={(x) => setSpending(x)}
+                onDelete={onDeleteEvent}
+              />
+            ))
+          )}
+        </div>
+
+        {/* Table */}
+        <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                <th className="px-3 py-2 text-left">Title</th>
+                <th className="px-3 py-2 text-left">Mode</th>
+                <th className="px-3 py-2 text-left">Account</th>
+                <th className="px-3 py-2 text-right">Target</th>
+                <th className="px-3 py-2 text-right">Funded</th>
+                <th className="px-3 py-2 text-right">Spent</th>
+                <th className="px-3 py-2 text-left">Due</th>
+                <th className="px-3 py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">
+                    No events
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((e) => {
+                  const hasSpend = (e.spentCents || 0) > 0;
+                  const refundable = Math.max(0, (e.fundedCents || 0) - (e.spentCents || 0)) > 0;
+                  const canDelete = !hasSpend && (e.fundedCents || 0) === 0;
+                  return (
+                    <tr key={e._id} className="border-t">
+                      <td className="px-3 py-2">{e.title}</td>
+                      <td className="px-3 py-2">{e.mode}</td>
+                      <td className="px-3 py-2">{accounts.find((a) => a._id === e.primaryAccountId)?.name || "—"}</td>
+                      <td className="px-3 py-2 text-right">{currency(e.targetCents, e.currency || "LKR")}</td>
+                      <td className="px-3 py-2 text-right">{currency(e.fundedCents, e.currency || "LKR")}</td>
+                      <td className="px-3 py-2 text-right">{currency(e.spentCents, e.currency || "LKR")}</td>
+                      <td className="px-3 py-2">{e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—"}</td>
+                      <td className="px-3 py-2 text-right space-x-3">
+                        <button className="text-blue-600 hover:underline" onClick={() => { setEditing(e); setOpen(true); }}>
+                          Edit
+                        </button>
+                        <button className="text-emerald-600 hover:underline" onClick={() => setFunding(e)}>
+                          Fund
+                        </button>
+                        {refundable && (
+                          <button className="text-amber-600 hover:underline" onClick={() => setDefunding(e)}>
+                            Remove Funds
+                          </button>
+                        )}
+                        {!hasSpend && (
+                          <button
+                            className={canDelete ? "text-red-600 hover:underline" : "text-slate-400 cursor-not-allowed"}
+                            onClick={() => (canDelete ? onDeleteEvent(e) : null)}
+                            disabled={!canDelete}
+                            title={canDelete ? "Delete" : (e.fundedCents > 0 ? "Remove funds first to delete" : "")}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Modals */}
+        <EventForm
+          open={open}
+          onClose={() => {
+            setOpen(false);
+            setEditing(null);
+          }}
+          onSave={onSaveEvent}
+          accounts={accounts}
+          initial={editing}
+          budget={planWithUsage}
+        />
+
+        <FundModal
+          open={!!funding}
+          onClose={() => setFunding(null)}
+          accounts={accounts}
+          event={funding}
+          onSave={onFundEvent}
+          budget={planWithUsage}
+        />
+
+        <DefundModal open={!!defunding} onClose={() => setDefunding(null)} accounts={accounts} event={defunding} onSave={onDefundEvent} />
+
+        <SpendModal open={!!spending} onClose={() => setSpending(null)} accounts={accounts} event={spending} onSave={onSpendEvent} />
       </div>
-
-      {toastMessage && <div className="toast">{toastMessage}</div>}
-
-      <footer className="app-footer">© 2025 MyBudgetPal. All Rights Reserved.</footer>
-    </>
+    </div>
   );
 }
-
-export default EventManagement;

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { XMarkIcon } from "@heroicons/react/24/outline";
-import { money } from "../../../lib/format";
-import { patchPlan, putDtdSub } from "../../../services/api";
+import { money, sanitizeMoney } from "../../../budget/utils";
+import { patchPlan, putDtdSub } from "../../../budget/api";
 
 export default function EditDtdOneModal({ period, categoryId, name, currentAlloc, plan, income, onClose, onSaved }) {
   const [val, setVal] = useState(String(currentAlloc ?? 0));
@@ -10,7 +10,7 @@ export default function EditDtdOneModal({ period, categoryId, name, currentAlloc
 
   const dtdSubs = plan?.dtd?.subBudgets || [];
   const currentSum = dtdSubs.reduce((s, sb) => s + Number(sb.amount || 0), 0);
-  const thisBefore = dtdSubs.find((sb) => (String(sb?.categoryId?._id ?? sb?.categoryId ?? "") === String(categoryId)));
+  const thisBefore = dtdSubs.find((sb) => String(sb?.categoryId?._id ?? sb?.categoryId ?? "") === String(categoryId));
   const old = Number(thisBefore?.amount || 0);
   const nextDtdTotal = currentSum - old + Number(val || 0);
 
@@ -52,7 +52,7 @@ export default function EditDtdOneModal({ period, categoryId, name, currentAlloc
                 className="w-full rounded-xl border border-slate-200 pl-12 pr-3 py-2"
                 inputMode="decimal"
                 value={val}
-                onChange={(e) => setVal(e.target.value.replace(/[^\d.]/g, ""))}
+                onChange={(e) => setVal(sanitizeMoney(e.target.value))}
               />
             </div>
 
@@ -63,9 +63,7 @@ export default function EditDtdOneModal({ period, categoryId, name, currentAlloc
               </div>
               <div className="px-4 py-2 flex items-center justify-between">
                 <div className="text-slate-600">Projected Total After Change</div>
-                <div className={`font-extrabold ${over ? "text-rose-600" : "text-emerald-600"}`}>
-                  {money(nextTotal)}
-                </div>
+                <div className={`font-extrabold ${over ? "text-rose-600" : "text-emerald-600"}`}>{money(nextTotal)}</div>
               </div>
               <div className="px-4 py-2 flex items-center justify-between">
                 <div className="text-slate-600">Total Monthly Income</div>
@@ -76,7 +74,9 @@ export default function EditDtdOneModal({ period, categoryId, name, currentAlloc
             {err && <div className="text-rose-600 text-sm">{err}</div>}
           </div>
           <div className="px-6 py-4 border-t flex items-center justify-end gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-white border hover:bg-slate-50">Cancel</button>
+            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-white border hover:bg-slate-50">
+              Cancel
+            </button>
             <button
               disabled={saving || over}
               onClick={save}

@@ -10,7 +10,7 @@ import categoryRoutes from "./dayToDayExpenses/categoryRoutes.js";
 import budgetPlanRouter from "./budgetManagement/budgetRoutes.js";
 import eventRoutes from "./eventExpenses/eventRoutes.js";
 import accountRoutes from './AccountManagement/AccountRoutes.js';
-
+import savingRoutes from './savingGoals/savingsRoutes.js';
 
 
 dotenv.config();
@@ -27,7 +27,7 @@ app.use((req, _res, next) => {
   const raw = req.header("x-user-id");
   req.userId = mongoose.isValidObjectId(raw) ? new mongoose.Types.ObjectId(raw) : DEMO_USER_ID;
   next();
-});
+});                      
 
 // Health
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -40,6 +40,7 @@ app.use("/api/categories", categoryRoutes);
 app.use("/api/budget", budgetPlanRouter);
 app.use("/api/events", eventRoutes);
 app.use("/api/accounts", accountRoutes);
+app.use("/api/savings-goals", savingRoutes);
 
 // 404 fallback
 app.use((req, res) => res.status(404).json({ error: "Not found" }));

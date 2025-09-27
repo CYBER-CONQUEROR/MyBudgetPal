@@ -1,5 +1,5 @@
-// routes/category.routes.js
-import express from "express";
+// routes/categoryRoutes.js
+import { Router } from "express";
 import {
   listCategories,
   createCategory,
@@ -7,9 +7,9 @@ import {
   deleteCategory,
 } from "./categoryController.js";
 
-const router = express.Router();
+const router = Router();
 
-// /api/categories
+// All routes expect req.userId to be set by upstream auth middleware
 router.get("/", listCategories);
 router.post("/", createCategory);
 router.put("/:id", updateCategory);

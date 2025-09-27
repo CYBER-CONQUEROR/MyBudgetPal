@@ -1,22 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
-import axios from "axios";
-
-/* ---------- API ---------- */
-const api = axios.create({ baseURL: "http://localhost:4000" });
+import api from "../api/api.js";
 
 const Accounts = {
-  list: () => api.get("/api/accounts", { params: { includeArchived: "false" } }).then(r => r.data),
+  list: () => api.get("accounts", { params: { includeArchived: "false" } }).then(r => r.data),
 };
 
 const Commitments = {
-  list: (p = {}) => api.get("/api/commitments", { params: p }).then(r => r.data),
-  create: (b) => api.post("/api/commitments", b).then(r => r.data),
-  update: (id, b) => api.put(`/api/commitments/${id}`, b).then(r => r.data),
-  remove: (id) => api.delete(`/api/commitments/${id}`).then(r => r.data),
+  list: (p = {}) => api.get("commitments", { params: p }).then(r => r.data),
+  create: (b) => api.post("commitments", b).then(r => r.data),
+  update: (id, b) => api.put(`commitments/${id}`, b).then(r => r.data),
+  remove: (id) => api.delete(`commitments/${id}`).then(r => r.data),
 };
 
 const Budget = {
-  getPlan: (period) => api.get(`/api/budget/plans/${period}`).then(r => r.data).catch((e) => {
+  getPlan: (period) => api.get(`budget/plans/${period}`).then(r => r.data).catch((e) => {
     if (e?.response?.status === 404) return null; // no plan for this month
     throw e;
   }),

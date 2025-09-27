@@ -1,57 +1,111 @@
-// src/pages/DtdExpenses.jsx
+// src/pages/DailyPage.jsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw } from "lucide-react";
+import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X } from "lucide-react";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import api from "../api/api.js"; // axios instance with baseURL=/api and withCredentials:true
 
 /* =========================
-   Local date helpers (fixes 08→09 bug)
+   Local date helpers
    ========================= */
 const pad = (n) => String(n).padStart(2, "0");
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const ym = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 const startOfMonth = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), 1);
 const endOfMonth = (d = new Date()) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-const periodFromDateInput = (s) => (typeof s === "string" && s.length >= 7 ? s.slice(0, 7) : ym(new Date()));
+const isSameMonth = (d, ref = new Date()) => d.getFullYear() === ref.getFullYear() && d.getMonth() === ref.getMonth();
+const inRange = (d, start, end) => {
+  const ts = new Date(d).setHours(0, 0, 0, 0);
+  const s = start ? new Date(start).setHours(0, 0, 0, 0) : -Infinity;
+  const e = end ? new Date(end).setHours(23, 59, 59, 999) : Infinity;
+  return ts >= s && ts <= e;
+};
 
 /* =========================
-   API helpers
+   API helpers (axios client)
    ========================= */
-const API_BASE = "http://localhost:4000/api";
-const X_USER_ID = localStorage.getItem("x-user-id") || "000000000000000000000001";
-const HEADERS = { "Content-Type": "application/json", "x-user-id": X_USER_ID };
-
-async function request(url, opts = {}) {
-  const res = await fetch(url, { ...opts, headers: { ...HEADERS, ...(opts.headers || {}) } });
-  const text = await res.text();
-  let json = null;
-  try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-  if (!res.ok) {
-    const msg = json?.error || json?.detail || json?.message || `HTTP ${res.status}`;
-    const err = new Error(msg); err.status = res.status; throw err;
-  }
-  return json;
-}
+const asList = (res) =>
+  Array.isArray(res?.data?.data) ? res.data.data : Array.isArray(res?.data) ? res.data : [];
 
 const expensesAPI = {
-  list: (q = {}) => request(`${API_BASE}/expenses?${new URLSearchParams(q).toString()}`),
-  create: (payload) => request(`${API_BASE}/expenses`, { method: "POST", body: JSON.stringify(payload) }),
-  update: (id, payload) => request(`${API_BASE}/expenses/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
-  remove: (id) => request(`${API_BASE}/expenses/${id}`, { method: "DELETE" }),
+  list: async (q = {}) => asList(await api.get("expenses", { params: q })),
+  create: async (payload) => {
+    try {
+      const res = await api.post("expenses", payload);
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      throw new Error(msg || "Failed to create expense");
+    }
+  },
+  update: async (id, payload) => {
+    try {
+      const res = await api.put(`expenses/${id}`, payload);
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      throw new Error(msg || "Failed to update expense");
+    }
+  },
+  remove: async (id) => {
+    try {
+      const res = await api.delete(`expenses/${id}`);
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      throw new Error(msg || "Failed to delete expense");
+    }
+  },
 };
 
 const categoriesAPI = {
-  list: () => request(`${API_BASE}/categories`),
-  create: (name) => request(`${API_BASE}/categories`, { method: "POST", body: JSON.stringify({ name }) }),
-  update: (id, body) => request(`${API_BASE}/categories/${id}`, { method: "PUT", body: JSON.stringify(body) }),
-  remove: (id, reassignTo = "Other") =>
-    request(`${API_BASE}/categories/${id}?reassignTo=${encodeURIComponent(reassignTo)}`, { method: "DELETE" }),
+  list: async () => asList(await api.get("categories")),
+  create: async (name) => {
+    try {
+      const res = await api.post("categories", { name });
+      return res.data;
+    } catch (err) {
+      const status = err?.response?.status;
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      if (status === 409) throw new Error("Category already exists");
+      throw new Error(msg || "Failed to create category");
+    }
+  },
+  update: async (id, body) => {
+    try {
+      const res = await api.put(`categories/${id}`, body);
+      return res.data;
+    } catch (err) {
+      const status = err?.response?.status;
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      if (status === 409) throw new Error("Category already exists");
+      throw new Error(msg || "Failed to update category");
+    }
+  },
+  remove: async (id, reassign = "Other") => {
+    try {
+      const res = await api.delete(`categories/${id}`, { params: { reassign } });
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      throw new Error(msg || "Failed to delete category");
+    }
+  },
 };
 
 const budgetAPI = {
-  getPlan: (period) => request(`${API_BASE}/budget/plans/${period}`),
+  getPlan: async (period) => {
+    try {
+      const res = await api.get(`budget/plans/${period}`);
+      return res.data || null;
+    } catch (e) {
+      if (e?.response?.status === 404) return null;
+      throw e;
+    }
+  },
 };
 
 const accountsAPI = {
-  list: () => request(`${API_BASE}/accounts?includeArchived=false`),
+  list: async () => asList(await api.get("accounts", { params: { includeArchived: "false" } })),
 };
 
 /* =========================
@@ -66,66 +120,116 @@ const fmtLKR = (n) =>
 /* =========================
    Page
    ========================= */
-export default function DtdExpenses() {
-  const [range, setRange] = useState({ start: ymd(startOfMonth()), end: ymd(endOfMonth()) });
-  const period = periodFromDateInput(range.start);
+export default function DailyPage() {
+  // Fixed month for budget UI
+  const today = new Date();
+  const fixedStart = ymd(startOfMonth(today));
+  const fixedEnd = ymd(endOfMonth(today));
+  const period = ym(today);
 
-  const [expenses, setExpenses] = useState([]);
-  const [cats, setCats] = useState([]);       // [{_id,name}]
+  // Filters for the LIST only
+  const [filters, setFilters] = useState({
+    title: "",
+    description: "",
+    start: "",
+    end: "",
+    categoryId: "",
+    accountId: "",
+  });
+
+  // Data
+  const [listExpenses, setListExpenses] = useState([]);
+  const [rawMonthExpenses, setRawMonthExpenses] = useState([]);
+  const [cats, setCats] = useState([]);
   const [plan, setPlan] = useState(null);
-  const [accounts, setAccounts] = useState([]); // [{_id,name,type,institution}]
+  const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
-  const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [catOpen, setCatOpen] = useState(false);
-
-  const reload = useCallback(async () => {
+  const reloadAll = useCallback(async () => {
     try {
-      setLoading(true); setErr("");
-      const [expRes, catsRes, planRes, acctsRes] = await Promise.allSettled([
-        expensesAPI.list({ startDate: range.start, endDate: range.end, sortBy: "date", order: "desc" }),
+      setLoading(true);
+      setErr("");
+
+      const params = {};
+      if (filters.start) params.startDate = filters.start;
+      if (filters.end) params.endDate = filters.end;
+      params.sortBy = "date";
+      params.order = "desc";
+
+      const [listRes, monthRes, catsRes, planRes, acctsRes] = await Promise.allSettled([
+        expensesAPI.list(params),
+        expensesAPI.list({ startDate: fixedStart, endDate: fixedEnd }),
         categoriesAPI.list(),
         budgetAPI.getPlan(period),
         accountsAPI.list(),
       ]);
 
-      if (expRes.status === "fulfilled") setExpenses(expRes.value?.data || []);
-      else setErr(expRes.reason?.message || "Failed to load expenses");
+      if (listRes.status === "fulfilled") setListExpenses(listRes.value || []);
+      else setErr(listRes.reason?.message || "Failed to load expenses");
 
-      if (catsRes.status === "fulfilled") setCats(catsRes.value?.data || []);
+      if (monthRes.status === "fulfilled") setRawMonthExpenses(monthRes.value || []);
+      if (catsRes.status === "fulfilled") setCats(catsRes.value || []);
       if (planRes.status === "fulfilled") setPlan(planRes.value || null);
-      else if (planRes.reason?.status === 404) setPlan(null);
-      else if (planRes.status === "rejected") setErr((e) => e || planRes.reason?.message || "Failed to load plan");
-
       if (acctsRes.status === "fulfilled") setAccounts(acctsRes.value || []);
     } catch (e) {
       setErr(e.message || "Failed to load");
     } finally {
       setLoading(false);
     }
-  }, [range.start, range.end, period]);
+  }, [filters.start, filters.end, period, fixedStart, fixedEnd]);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    reloadAll();
+  }, [reloadAll]);
 
-  const totalSpent = useMemo(
-    () => (expenses || []).reduce((sum, e) => sum + rupeesFrom(e.amountCents, e.amount), 0),
-    [expenses]
+  // Client-side filters
+  const visibleExpenses = useMemo(() => {
+    const termTitle = (filters.title || "").trim().toLowerCase();
+    const termDesc = (filters.description || "").trim().toLowerCase();
+    const catId = (filters.categoryId || "").trim();
+    const accId = (filters.accountId || "").trim();
+
+    return (listExpenses || []).filter((e) => {
+      const okTitle = termTitle ? (e.title || "").toLowerCase().includes(termTitle) : true;
+      const okDesc = termDesc ? (e.description || "").toLowerCase().includes(termDesc) : true;
+      const okCat = catId
+        ? String(e.categoryId || e.category?._id) === String(catId)
+        : true;
+      const okAcc = accId ? String(e.accountId) === String(accId) : true;
+      const okRange = inRange(e.date, filters.start, filters.end);
+      return okTitle && okDesc && okCat && okAcc && okRange;
+    });
+  }, [listExpenses, filters]);
+
+  /* ---- Budget math (fixed month only) ---- */
+  const monthExpenses = useMemo(() => {
+    return (rawMonthExpenses || []).filter((e) => isSameMonth(new Date(e.date), today));
+  }, [rawMonthExpenses, today]);
+
+  const monthSpent = useMemo(
+    () => (monthExpenses || []).reduce((sum, e) => sum + rupeesFrom(e.amountCents, e.amount), 0),
+    [monthExpenses]
   );
-  const dtdCap = plan?.dtd?.amount ?? 0;
 
-  // spent by categoryId
+  const dtdCap = plan?.dtd?.amount ?? 0;
+  const totalPlanned = dtdCap || (plan?.dtd?.subBudgets || []).reduce((acc, s) => acc + (s.amount || 0), 0);
+  const remaining = Math.max(0, (totalPlanned || 0) - (monthSpent || 0));
+  const pieData = [
+    { name: "Spent", value: Math.min(monthSpent, totalPlanned) },
+    { name: "Remaining", value: Math.max(0, totalPlanned - monthSpent) },
+  ];
+
   const spentByCatId = useMemo(() => {
     const map = new Map();
-    (expenses || []).forEach((e) => {
+    (monthExpenses || []).forEach((e) => {
       const id = e.categoryId || e.category?._id;
       const amt = rupeesFrom(e.amountCents, e.amount);
       if (!id) return;
       map.set(String(id), (map.get(String(id)) || 0) + amt);
     });
     return map;
-  }, [expenses]);
+  }, [monthExpenses]);
 
   const subUsages = useMemo(() => {
     const subs = plan?.dtd?.subBudgets || [];
@@ -140,13 +244,15 @@ export default function DtdExpenses() {
     });
   }, [plan, spentByCatId]);
 
-  const totalPlanned = dtdCap || subUsages.reduce((acc, r) => acc + (r.planned || 0), 0);
-
   const onNew = () => { setEditing(null); setShowForm(true); };
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [catOpen, setCatOpen] = useState(false);
+
   const onEdit = (e) => { setEditing(e); setShowForm(true); };
   const onDelete = async (id) => {
     if (!window.confirm("Delete this expense?")) return;
-    try { await expensesAPI.remove(id); reload(); } catch (e) { alert(e.message || "Delete failed"); }
+    try { await expensesAPI.remove(id); reloadAll(); } catch (e) { alert(e.message || "Delete failed"); }
   };
 
   const accountName = (id) => {
@@ -155,6 +261,9 @@ export default function DtdExpenses() {
     const bits = [a.name, a.type];
     return bits.filter(Boolean).join(" • ");
   };
+
+  const hasAnyFilter =
+    filters.title || filters.description || filters.start || filters.end || filters.categoryId || filters.accountId;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -170,96 +279,67 @@ export default function DtdExpenses() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setCatOpen(true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50 shadow-sm"
             >
               <Settings size={16} /> Manage Categories
             </button>
             <button
               onClick={onNew}
-              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 text-white px-4 py-2 text-sm font-semibold hover:bg-indigo-700"
+              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 text-white px-4 py-2 text-sm font-semibold hover:bg-indigo-700 shadow-sm"
             >
               <Plus size={16} /> Add Expense
             </button>
           </div>
         </div>
 
-        {/* Range controls */}
-        <div className="mt-4 flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-slate-600">From</label>
-            <input
-              type="date"
-              value={range.start}
-              onChange={(e) => setRange((r) => ({ ...r, start: e.target.value }))}
-              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-slate-600">To</label>
-            <input
-              type="date"
-              value={range.end}
-              onChange={(e) => setRange((r) => ({ ...r, end: e.target.value }))}
-              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5"
-            />
-          </div>
-          <button
-            onClick={reload}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50"
-          >
-            <RefreshCw size={14} /> Refresh
-          </button>
-          <span className="ml-auto text-sm text-slate-500">Period: <strong>{period}</strong></span>
-        </div>
-
-        {err && (
-          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700">
-            {err}
-          </div>
-        )}
-
         {/* Summary + usage */}
-        <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Left: donut + stats */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">This Month</h3>
+              <h3 className="text-lg font-semibold">This Month — {period}</h3>
               <span className="text-sm text-slate-500">Budget usage</span>
             </div>
 
-            <div className="mt-6 text-center text-slate-500">
+            <div className="mt-4 grid grid-cols-1 gap-3">
+              <div className="h-[280px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Tooltip formatter={(v) => fmtLKR(v)} />
+                    <Pie
+                      data={pieData}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={88}
+                      outerRadius={120}
+                      startAngle={90}
+                      endAngle={-270}
+                      paddingAngle={1}
+                    >
+                      <Cell key="spent" fill="#6366F1" />
+                      <Cell key="remain" fill="#E5E7EB" />
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+
               {plan ? (
-                <div className="space-y-4">
-                  <div className="text-2xl font-semibold">
-                    {totalPlanned > 0 ? (
-                      <>
-                        {fmtLKR(totalSpent)} / {fmtLKR(totalPlanned)}{" "}
-                        <span className="text-slate-400">
-                          ({Math.min(100, Math.round((totalSpent / Math.max(1, totalPlanned)) * 100))}%)
-                        </span>
-                      </>
-                    ) : (
-                      "No total budget configured"
-                    )}
-                  </div>
-                  <div className="flex items-center justify-center gap-6">
-                    <Stat label="Total Budget" value={fmtLKR(totalPlanned)} />
-                    <Stat label="Total Spent" value={fmtLKR(totalSpent)} />
-                  </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <MiniStat label="Total Budget" value={fmtLKR(totalPlanned)} />
+                  <MiniStat label="Spent (this month)" value={fmtLKR(monthSpent)} />
+                  <MiniStat label="Remaining" value={fmtLKR(remaining)} />
                 </div>
               ) : (
-                <>
-                  <div className="text-xl font-medium">No total budget configured</div>
-                  <div className="mt-3 flex items-center justify-center gap-6">
-                    <Stat label="Total Budget" value={fmtLKR(0)} />
-                    <Stat label="Total Spent" value={fmtLKR(totalSpent)} />
-                  </div>
-                </>
+                <div className="text-center text-slate-500">
+                  No total budget configured for this month.
+                </div>
               )}
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-5">
-            <h3 className="text-lg font-semibold">Categories — usage</h3>
+          {/* Right: category bars (month-only) */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-lg font-semibold">Categories — usage (this month)</h3>
             <div className="mt-4 space-y-3">
               {(subUsages.length ? subUsages : [{ name: "Unnamed", planned: 0, spent: 0, pct: 0 }]).map((r) => (
                 <div key={r.catId || r.name} className="rounded-xl border border-slate-100 p-3">
@@ -270,7 +350,7 @@ export default function DtdExpenses() {
                     </div>
                   </div>
                   <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden">
-                    <div className="h-2 rounded-full bg-indigo-500" style={{ width: `${r.pct}%` }} />
+                    <div className="h-2 rounded-full" style={{ width: `${r.pct}%`, backgroundColor: r.color || "#6366F1" }} />
                   </div>
                 </div>
               ))}
@@ -278,10 +358,120 @@ export default function DtdExpenses() {
           </div>
         </div>
 
+        {/* Filters */}
+        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 text-indigo-700 px-3 py-1 text-xs font-medium">
+                <Filter size={14} /> Filters
+              </div>
+              {hasAnyFilter && (
+                <button
+                  onClick={() => { setFilters({ title: "", description: "", start: "", end: "", categoryId: "", accountId: "" }); }}
+                  className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-700 text-xs"
+                  title="Clear all"
+                >
+                  <X size={14}/> Clear all
+                </button>
+              )}
+            </div>
+            <div className="text-sm text-slate-500">
+              Budget Month: <strong>{period}</strong>
+            </div>
+          </div>
+
+          {/* Row 1 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="relative">
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">Title</label>
+              <Search size={16} className="absolute left-2 top-9 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                placeholder="Search by title"
+                value={filters.title}
+                onChange={(e) => setFilters(f => ({ ...f, title: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">Description</label>
+              <input
+                placeholder="Search description"
+                value={filters.description}
+                onChange={(e) => setFilters(f => ({ ...f, description: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
+              />
+            </div>
+          </div>
+
+          {/* Row 2 */}
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">From</label>
+              <input
+                type="date"
+                value={filters.start}
+                onChange={(e) => setFilters(f => ({ ...f, start: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">To</label>
+              <input
+                type="date"
+                value={filters.end}
+                onChange={(e) => setFilters(f => ({ ...f, end: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">Category</label>
+              <select
+                value={filters.categoryId}
+                onChange={(e) => setFilters(f => ({ ...f, categoryId: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
+              >
+                <option value="">All</option>
+                {cats.map((c) => <option key={c._id} value={c._id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">Account</label>
+              <select
+                value={filters.accountId}
+                onChange={(e) => setFilters(f => ({ ...f, accountId: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
+              >
+                <option value="">All</option>
+                {accounts.map((a) => (
+                  <option key={a._id} value={a._id}>
+                    {a.name} {a.type ? `• ${a.type}` : ""} {a.institution ? `• ${a.institution}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-2 md:justify-end">
+              <button
+                onClick={reloadAll}
+                className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-full bg-indigo-600 text-white px-4 py-2 text-sm font-semibold hover:bg-indigo-700 shadow-sm"
+                title="Apply filters"
+              >
+                <RefreshCw size={14} /> Apply
+              </button>
+              <button
+                onClick={() => { setFilters({ title: "", description: "", start: "", end: "", categoryId: "", accountId: "" }); }}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm hover:bg-slate-50 shadow-sm"
+                title="Reset filters"
+              >
+                <Filter size={14} /> Reset
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Expenses list */}
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Expenses ({expenses.length})</h3>
+            <h3 className="text-lg font-semibold">Expenses ({visibleExpenses.length})</h3>
             {!accounts.length && (
               <div className="inline-flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">
                 No accounts available — create one in Accounts.
@@ -291,22 +481,22 @@ export default function DtdExpenses() {
 
           {loading ? (
             <div className="mt-6 text-slate-500">Loading…</div>
-          ) : !expenses.length ? (
+          ) : !visibleExpenses.length ? (
             <div className="mt-6 text-slate-500">No expenses in this range.</div>
           ) : (
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-              {expenses.map((e) => {
+              {visibleExpenses.map((e) => {
                 const amount = rupeesFrom(e.amountCents, e.amount);
                 const catName = e.categoryName || e.category?.name || e.category || "—";
                 return (
-                  <div key={e._id} className="rounded-xl border border-slate-200 p-4">
+                  <div key={e._id} className="rounded-xl border border-slate-200 p-4 hover:shadow-sm transition">
                     <div className="flex items-start justify-between">
-                      <div>
-                        <div className="text-base font-semibold">{e.title}</div>
+                      <div className="min-w-0 pr-3">
+                        <div className="text-base font-semibold truncate">{e.title}</div>
                         <div className="text-sm text-slate-600">
                           {new Date(e.date).toLocaleDateString()} • {catName} • {accountName(e.accountId)}
                         </div>
-                        {e.description && <div className="mt-1 text-sm text-slate-700">{e.description}</div>}
+                        {e.description && <div className="mt-1 text-sm text-slate-700 line-clamp-3">{e.description}</div>}
                       </div>
                       <div className="text-right">
                         <div className="text-lg font-semibold">{fmtLKR(amount)}</div>
@@ -344,7 +534,7 @@ export default function DtdExpenses() {
             try {
               if (editing?._id) await expensesAPI.update(editing._id, payload);
               else await expensesAPI.create(payload);
-              setShowForm(false); setEditing(null); reload();
+              setShowForm(false); setEditing(null); reloadAll();
             } catch (e) { alert(e.message || "Save failed"); }
           }}
         />
@@ -353,8 +543,8 @@ export default function DtdExpenses() {
       {catOpen && (
         <CategoryManagerModal
           categories={cats}
-          expenses={expenses}
-          onClose={(changed) => { setCatOpen(false); if (changed) reload(); }}
+          expenses={listExpenses}
+          onClose={(changed) => { setCatOpen(false); if (changed) reloadAll(); }}
         />
       )}
     </div>
@@ -364,9 +554,9 @@ export default function DtdExpenses() {
 /* =========================
    Small pieces
    ========================= */
-function Stat({ label, value }) {
+function MiniStat({ label, value }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 min-w-[160px]">
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
       <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
       <div className="text-lg font-semibold text-slate-900">{value}</div>
     </div>
@@ -374,7 +564,7 @@ function Stat({ label, value }) {
 }
 
 /* =========================
-   Expense Form Modal (no payment method; choose account)
+   Expense Form Modal
    ========================= */
 function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
   const isEdit = !!initial;
@@ -407,13 +597,12 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
 
     const payload = {
       title: title.trim(),
-      amount: amt,                 // rupees (for compatibility)
-      amountCents: centsFrom(amt), // integer cents (server uses this)
+      amount: amt,
+      amountCents: centsFrom(amt),
       categoryId,
-      date,                        // yyyy-mm-dd
+      date,
       description: description || "",
-      accountId,                   // <-- required
-      // paymentMethod removed
+      accountId,
     };
 
     try { setSaving(true); await onSave(payload); } finally { setSaving(false); }
@@ -527,9 +716,9 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   const [list, setList] = useState(categories || []);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => setList(categories || []), [categories]);
+  React.useEffect(() => setList(categories || []), [categories]);
 
-  const inUseCount = useCallback(
+  const inUseCount = React.useCallback(
     (catId) => expenses.filter((e) => String(e.categoryId) === String(catId) || String(e.category?._id) === String(catId)).length,
     [expenses]
   );
@@ -537,24 +726,56 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   const add = async () => {
     const name = (newName || "").trim();
     if (!name) return;
+    // client-side dup guard (case-insensitive)
+    if (list.some(c => (c.name || "").toLowerCase() === name.toLowerCase())) {
+      alert("Category already exists.");
+      return;
+    }
     setBusy(true);
-    try { await categoriesAPI.create(name); const res = await categoriesAPI.list(); setList(res.data || []); setNewName(""); }
-    finally { setBusy(false); }
+    try {
+      await categoriesAPI.create(name);
+      const res = await categoriesAPI.list();
+      setList(res || []);
+      setNewName("");
+    } catch (e) {
+      alert(e.message || "Failed to create category");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const rename = async (id, next) => {
-    const name = (next || "").trim(); if (!name) return;
+    const name = (next || "").trim();
+    if (!name) return;
+    if (list.some(c => c._id !== id && (c.name || "").toLowerCase() === name.toLowerCase())) {
+      alert("Category already exists.");
+      return;
+    }
     setBusy(true);
-    try { await categoriesAPI.update(id, { name }); const res = await categoriesAPI.list(); setList(res.data || []); }
-    finally { setBusy(false); }
+    try {
+      await categoriesAPI.update(id, { name });
+      const res = await categoriesAPI.list();
+      setList(res || []);
+    } catch (e) {
+      alert(e.message || "Rename failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const remove = async (id) => {
     const used = inUseCount(id);
     if (!window.confirm(used ? `This category is used by ${used} expense(s). Delete and reassign to "Other"?` : "Delete category?")) return;
     setBusy(true);
-    try { await categoriesAPI.remove(id, "Other"); const res = await categoriesAPI.list(); setList(res.data || []); }
-    finally { setBusy(false); }
+    try {
+      await categoriesAPI.remove(id, "Other");
+      const res = await categoriesAPI.list();
+      setList(res || []);
+    } catch (e) {
+      alert(e.message || "Delete failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (

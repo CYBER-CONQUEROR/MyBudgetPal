@@ -1,12 +1,8 @@
+// src/pages/BudgetPlanPage.jsx
 import React, { useMemo, useState } from "react";
-import {
-  ym, thisMonth, nextMonthOfToday, monthLabel, addMonths, money,
-} from "../budget/utils";
-import { C } from "../budget/utils";
-import {
-  patchPlan, putDtdSub, deletePlanApi, createPlanApi, replacePlanApi,
-  getPlan, getCategories, getAccounts, accountAmount,
-} from "../budget/api";
+import { thisMonth, nextMonthOfToday, monthLabel, addMonths, money } from "../budget/utils";
+import { C } from "../budget/compute";
+import { deletePlanApi, getPlan } from "../budget/api";
 import useBudgetData from "../budget/useBudgetData";
 import { buildDtdRows, buildModules, totalsFromModules, buildBarData } from "../budget/compute";
 import SummaryCard from "../components/budget/SummaryCard";
@@ -20,9 +16,9 @@ import EditOneModal from "../components/budget/modals/EditOneModal";
 import EditDtdOneModal from "../components/budget/modals/EditDtdOneModal";
 import DangerZone from "../components/budget/DangerZone";
 
-export default function BudgetManagement() {
+export default function BudgetPlanPage() {
   const [period, setPeriod] = useState(thisMonth());
-  const { plan, income, dtdExpenses, bankTxns, eventExpenses, SavingsExpenses, loading, error, refetch } = useBudgetData(period);
+  const { plan, income, dtdExpenses, loading, error, refetch, actuals } = useBudgetData(period);
 
   const realCurrent = thisMonth();
   const realNext = nextMonthOfToday();
@@ -53,15 +49,8 @@ export default function BudgetManagement() {
   const totalBudgeted = useMemo(() => totalsFromModules(modules), [modules]);
   const unbudgeted = Math.max(0, budgets.income - totalBudgeted);
 
+  const barData = useMemo(() => buildBarData(budgets, actuals), [budgets, actuals]);
 
-
-  const dtdActual = dtdRows.reduce((s, r) => s + Number(r.actual || 0), 0);
-  const commitmentsActual = bankTxns.reduce((s, t) => s + Number((t.amountCents / 100) || 0), 0);
-  const eventsActual = eventExpenses.reduce((s, t) => s + Number((t.spentCents / 100) || 0), 0);
-  console.log(eventsActual);
-  const savingsActual = SavingsExpenses.reduce((s, t) => s + Number((t.savedThisMonthCents / 100) || 0), 0);
-
-  const barData = buildBarData(budgets, commitmentsActual, dtdActual, eventsActual, savingsActual);
   const canCreateForThisPeriod = isCurrentPeriod;
   const showForecastCard = !plan && isNextOfToday;
   const showCreateButton = !plan && canCreateForThisPeriod;

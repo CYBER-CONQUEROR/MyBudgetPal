@@ -35,7 +35,29 @@ export const inPeriod = (dt, period) => periodOf(dt) === period;
 
 /* ========================= FORMAT / INPUT ========================= */
 export const fmt0 = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0 });
-export const money = (n, code = "LKR") => `${code} ${fmt0(n)}`;
+export function money(cents, {
+  currency = "LKR",
+  minFraction = 0,
+  maxFraction = 0,
+} = {}) {
+  const n = Number(cents) || 0;
+  const rupees = n / 100; // <<< IMPORTANT: convert cents -> rupees
+  return `${currency} ${rupees.toLocaleString(undefined, {
+    minimumFractionDigits: minFraction,
+    maximumFractionDigits: maxFraction,
+  })}`;
+}
+export function moneyFromRupees(rupees, {
+  currency = "LKR",
+  minFraction = 0,
+  maxFraction = 0,
+} = {}) {
+  const r = Number(rupees) || 0;
+  return `${currency} ${r.toLocaleString(undefined, {
+    minimumFractionDigits: minFraction,
+    maximumFractionDigits: maxFraction,
+  })}`;
+}
 export const getAmount = (r) => Number(r?.amount ?? (r?.amountCents != null ? r.amountCents / 100 : 0));
 
 export const sanitizeMoney = (raw) => {

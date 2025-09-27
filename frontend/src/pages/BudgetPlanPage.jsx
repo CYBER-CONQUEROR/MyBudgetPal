@@ -20,26 +20,88 @@ import DangerZone from "../components/budget/DangerZone";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-/* ---------------- PDF HELPERS ---------------- */
+/* ---------------- Helpers ---------------- */
 function makeReportFilename(prefix, ts = new Date()) {
   return `${prefix}_${ts.toISOString().replace(/[:T]/g, "-").slice(0, 15)}.pdf`;
 }
 
-async function generateBudgetPDF({ plans, rangeLabel }) {
+/**
+ * Build a map of { categoryId: actualRupees } using (in order of preference):
+ * 1) actuals.dtdBreakdown (already aggregated)
+ * 2) dtdExpenses array for current period (sum by category)
+ */
+function buildDtdActualMap(actuals, dtdExpenses) {
+  // 1) If hook already exposes breakdown, prefer that
+  if (actuals && actuals.dtdBreakdown && typeof actuals.dtdBreakdown === "object") {
+    return actuals.dtdBreakdown; // assumed Rupees already
+  }
+
+  // 2) Fallback: aggregate from dtdExpenses
+  const map = {};
+  for (const e of Array.isArray(dtdExpenses) ? dtdExpenses : []) {
+    // Try to read a category id
+    const cat =
+      (e?.categoryId && (e.categoryId._id || e.categoryId)) ||
+      e?.category ||
+      e?.category_id ||
+      "";
+    if (!cat) continue;
+    const id = String(cat);
+
+    // Amount could be rupees or cents; support both
+    const amtR =
+      e?.amount != null
+        ? Number(e.amount)
+        : Number(e?.amountCents || 0) / 100;
+
+    map[id] = (map[id] || 0) + (Number.isFinite(amtR) ? amtR : 0);
+  }
+  return map;
+}
+
+/**
+ * PDF generator — expects each plan item as:
+ *   { period: 'YYYY-MM', plan, actuals, dtdActuals: {catId: rupees} }
+ */
+async function generateBudgetPDF({ plans, rangeLabel, logoUrl = "/reportLogo.png" }) {
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
   const margin = 40;
-  const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
 
-  // Header
-  doc.setFont("helvetica", "bold").setFontSize(20).text("My Budget Pal", margin, margin + 12);
-  doc.setFont("helvetica", "normal").setFontSize(16).text("Budget Plans Report", margin, margin + 36);
+  // === HEADER WITH LOGO ===
+  let textX = margin;
+  try {
+    const img = new Image();
+    img.crossOrigin = "Anonymous";
+    img.src = logoUrl;
+    await new Promise((resolve, reject) => {
+      img.onload = () => {
+        doc.addImage(img, "PNG", margin, margin - 4, 44, 44);
+        textX = margin + 56;
+        resolve();
+      };
+      img.onerror = reject;
+    });
+  } catch (e) {
+    // If logo fails, we just continue without it
+    console.warn("Logo not loaded", e);
+  }
+
+  doc.setFont("helvetica", "bold").setFontSize(20).text("My Budget Pal", textX, margin + 12);
+  doc.setFont("helvetica", "normal").setFontSize(16).text("Budget Plans Report", textX, margin + 36);
 
   let y = margin + 70;
   doc.setFontSize(11).text(`Range: ${rangeLabel}`, margin, y);
   y += 20;
 
-  for (const { period, plan } of plans) {
+  doc.setFontSize(10).setTextColor(120);
+  doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+  doc.setTextColor(0);
+  
+  let grandBudgeted = 0;
+  let grandActual = 0;
+
+  for (const { period, plan, actuals, dtdActuals } of plans) {
     doc.setFont("helvetica", "bold").setFontSize(13).text(`Period: ${period}`, margin, y);
     y += 16;
 
@@ -49,41 +111,77 @@ async function generateBudgetPDF({ plans, rangeLabel }) {
       continue;
     }
 
-    // High-level modules
+    // ==== HIGH-LEVEL MODULES WITH ACTUALS ====
     const rows = [
-      ["Savings", money(plan?.savings?.amount || 0)],
-      ["Commitments", money(plan?.commitments?.amount || 0)],
-      ["Events", money(plan?.events?.amount || 0)],
-      ["DTD Total", money(plan?.dtd?.amount || 0)],
+      ["Savings",       money(plan?.savings?.amount      || 0), money(actuals?.savings      || 0)],
+      ["Commitments",   money(plan?.commitments?.amount  || 0), money(actuals?.commitments  || 0)],
+      ["Events",        money(plan?.events?.amount       || 0), money(actuals?.events       || 0)],
+      ["DTD Total",     money(plan?.dtd?.amount          || 0), money(actuals?.dtd          || 0)],
     ];
+
+    const totalBudgeted =
+      (plan?.savings?.amount || 0) +
+      (plan?.commitments?.amount || 0) +
+      (plan?.events?.amount || 0) +
+      (plan?.dtd?.amount || 0);
+
+    const totalActual =
+      (actuals?.savings || 0) +
+      (actuals?.commitments || 0) +
+      (actuals?.events || 0) +
+      (actuals?.dtd || 0);
+
+    grandBudgeted += totalBudgeted;
+    grandActual += totalActual;
+
     autoTable(doc, {
       startY: y,
-      head: [["Category", "Amount"]],
+      head: [["Category", "Budgeted", "Actual"]],
       body: rows,
       theme: "grid",
       styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: [242, 246, 252], textColor: 40 },
       margin: { left: margin, right: margin },
     });
     y = doc.lastAutoTable.finalY + 14;
 
-    // DTD sub-budgets table
+    // ==== DTD SUB-BUDGETS WITH ACTUALS (category-level) ====
     if (plan?.dtd?.subBudgets?.length) {
+      const dtdRows = plan.dtd.subBudgets.map((sb) => {
+        const catId = String(sb?.categoryId?._id ?? sb?.categoryId ?? "");
+        const name = sb?.name || sb?.categoryId?.name || "—";
+        const budgetR = Number(sb?.amount || 0);
+        const actualR = (dtdActuals && Number(dtdActuals[catId])) || 0;
+        return [name, money(budgetR), money(actualR)];
+      });
+
       autoTable(doc, {
         startY: y,
-        head: [["DTD Category", "Allocated"]],
-        body: plan.dtd.subBudgets.map(sb => [
-          sb?.name || sb?.categoryId?.name || "—",
-          money(sb.amount || 0),
-        ]),
+        head: [["DTD Category", "Budgeted", "Actual"]],
+        body: dtdRows,
         theme: "grid",
         styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [242, 246, 252], textColor: 40 },
         margin: { left: margin, right: margin },
       });
       y = doc.lastAutoTable.finalY + 20;
     }
+
+    // Period totals
+    doc.setFont("helvetica", "bold").setFontSize(11);
+    doc.text(`Total Budgeted: ${money(totalBudgeted)}`, margin, y);
+    y += 14;
+    doc.text(`Total Actual: ${money(totalActual)}`, margin, y);
+    y += 24;
   }
 
-  // Signature
+  // ==== GRAND TOTALS ====
+  doc.setFont("helvetica", "bold").setFontSize(13);
+  doc.text(`Grand Total Budgeted: ${money(grandBudgeted)}`, margin, y);
+  y += 16;
+  doc.text(`Grand Total Actual: ${money(grandActual)}`, margin, y);
+
+  // ==== SIGNATURE ====
   doc.setFont("helvetica", "normal").setFontSize(12);
   doc.text("Signature : ...........................................", margin, pageH - 60);
 
@@ -91,7 +189,7 @@ async function generateBudgetPDF({ plans, rangeLabel }) {
   doc.save(fn);
 }
 
-/* ---------------- COMPONENT ---------------- */
+/* ---------------- Component ---------------- */
 export default function BudgetPlanPage() {
   const [period, setPeriod] = useState(thisMonth());
   const { plan, income, dtdExpenses, loading, error, refetch, actuals } = useBudgetData(period);
@@ -107,18 +205,21 @@ export default function BudgetPlanPage() {
   const [showEditOne, setShowEditOne] = useState(null);
   const [showEditDtdOne, setShowEditDtdOne] = useState(null);
 
-  const budgets = useMemo(() => ({
-    savings: Number(plan?.savings?.amount || 0),
-    commitments: Number(plan?.commitments?.amount || 0),
-    events: Number(plan?.events?.amount || 0),
-    dtdTotal: Number(plan?.dtd?.amount || 0),
-    income: income || 0,
-  }), [plan, income]);
+  const budgets = useMemo(
+    () => ({
+      savings: Number(plan?.savings?.amount || 0),
+      commitments: Number(plan?.commitments?.amount || 0),
+      events: Number(plan?.events?.amount || 0),
+      dtdTotal: Number(plan?.dtd?.amount || 0),
+      income: income || 0,
+    }),
+    [plan, income]
+  );
 
   const dtdRows = useMemo(() => buildDtdRows(plan, dtdExpenses), [plan, dtdExpenses]);
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return q ? dtdRows.filter(r => r.name.toLowerCase().includes(q)) : dtdRows;
+    return q ? dtdRows.filter((r) => r.name.toLowerCase().includes(q)) : dtdRows;
   }, [filter, dtdRows]);
 
   const modules = useMemo(() => buildModules(budgets, C), [budgets]);
@@ -131,28 +232,39 @@ export default function BudgetPlanPage() {
   const showForecastCard = !plan && isNextOfToday;
   const showCreateButton = !plan && canCreateForThisPeriod;
 
-  const goPrev = () => setPeriod(p => addMonths(p, -1));
-  const goNext = () => setPeriod(p => addMonths(p, +1));
+  const goPrev = () => setPeriod((p) => addMonths(p, -1));
+  const goNext = () => setPeriod((p) => addMonths(p, +1));
   const onChangeBlocked = async (newPeriod) => {
     if (newPeriod === period) return;
     const p = await getPlan(newPeriod);
-    if (p) setPeriod(newPeriod); else window.alert("No budget plan for that month.");
+    if (p) setPeriod(newPeriod);
+    else window.alert("No budget plan for that month.");
   };
   const deletePlan = async () => {
     if (!plan) return;
     if (!window.confirm("Delete this month's budget plan? This cannot be undone.")) return;
-    await deletePlanApi(period); refetch();
+    await deletePlanApi(period);
+    refetch();
   };
 
-  /* NEW STATE for report */
+  /* --------- Report state --------- */
   const [startMonth, setStartMonth] = useState(thisMonth());
   const [endMonth, setEndMonth] = useState(thisMonth());
   const [loadingReport, setLoadingReport] = useState(false);
 
+  // Build current month DTD actuals map for the PDF (fixes missing category actuals)
+  const dtdActualsMap = useMemo(
+    () => buildDtdActualMap(actuals, dtdExpenses),
+    [actuals, dtdExpenses]
+  );
+
   const generateSingle = async () => {
     setLoadingReport(true);
     const p = await getPlan(period).catch(() => null);
-    await generateBudgetPDF({ plans: [{ period, plan: p }], rangeLabel: monthLabel(period) });
+    await generateBudgetPDF({
+      plans: [{ period, plan: p, actuals, dtdActuals: dtdActualsMap }],
+      rangeLabel: monthLabel(period),
+    });
     setLoadingReport(false);
   };
 
@@ -162,194 +274,162 @@ export default function BudgetPlanPage() {
     let cur = startMonth;
     while (cur <= endMonth) {
       const p = await getPlan(cur).catch(() => null);
-      plans.push({ period: cur, plan: p });
+      // ⚠️ TODO: fetch actuals + dtdExpenses for each month if you need true range actuals
+      plans.push({ period: cur, plan: p, actuals: {}, dtdActuals: {} });
       cur = addMonths(cur, +1);
     }
-    await generateBudgetPDF({ plans, rangeLabel: `${monthLabel(startMonth)} → ${monthLabel(endMonth)}` });
+    await generateBudgetPDF({
+      plans,
+      rangeLabel: `${monthLabel(startMonth)} → ${monthLabel(endMonth)}`,
+    });
     setLoadingReport(false);
   };
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-[#F4F7FE] to-[#E8ECF7]">
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
-        {/* header/actions */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <h1 className="text-3xl font-extrabold text-slate-800">Budget Management</h1>
-            <p className="text-sm text-slate-500">
-              Manage your monthly budget and track your spending with ease.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={generateSingle}
-              className="px-3 py-2 rounded-xl border bg-white"
-              disabled={loadingReport}
-            >
-              Generate Report
-            </button>
-            <button
-              className={`btn btn-ghost ${plan ? "" : "opacity-40 cursor-not-allowed"}`}
-              onClick={() => plan && setShowEditWhole(true)}
-              disabled={!plan}
-            >
-              Edit Budget Plan
-            </button>
-            <button
-              className={`btn btn-primary ${plan || !canCreateForThisPeriod ? "opacity-40 cursor-not-allowed" : ""
-                }`}
-              onClick={() => !plan && canCreateForThisPeriod && setShowCreate(true)}
-              disabled={!!plan || !canCreateForThisPeriod}
-            >
-              Add Budget
-            </button>
-          </div>
-        </div>
-
-        {/* NEW: Range Report Section */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Generate Range Report</h2>
-          <div className="flex flex-wrap gap-3 items-end">
-            <div>
-              <label className="text-sm text-slate-600">Start Month</label>
-              <input
-                type="month"
-                value={startMonth}
-                onChange={(e) => setStartMonth(e.target.value)}
-                className="rounded-xl border border-slate-300 px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="text-sm text-slate-600">End Month</label>
-              <input
-                type="month"
-                value={endMonth}
-                onChange={(e) => setEndMonth(e.target.value)}
-                className="rounded-xl border border-slate-300 px-3 py-2"
-              />
-            </div>
-            <button
-              onClick={generateRange}
-              disabled={loadingReport}
-              className="px-4 py-2 rounded-xl bg-indigo-600 text-white"
-            >
-              Generate Range Report
-            </button>
-          </div>
-        </div>
-
-        {/* Period strip navigation */}
-        <PeriodStrip
-          period={period}
-          plan={plan}
-          onPrev={goPrev}
-          onNext={goNext}
-          onChangeBlocked={onChangeBlocked}
-        />
-
-        {/* If no plan */}
-        {!plan && (
-          showForecastCard ? (
-            <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-6 flex items-center justify-between">
-              <div>
-                <div className="text-indigo-900 font-semibold">
-                  Get the Budget Forecast for {monthLabel(period)}
-                </div>
-                <div className="text-indigo-700/80 text-sm">
-                  See a suggested allocation based on your recent spending and commitments.
-                </div>
-              </div>
-              <button
-                className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:opacity-90"
-                onClick={() =>
-                  (window.location.href = `/budget/forecast?period=${period}`)
-                }
-              >
-                Get Forecast
-              </button>
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 flex items-center justify-between">
-              <div>
-                <div className="text-slate-800 font-semibold">
-                  No plan for {monthLabel(period)}
-                </div>
-                <div className="text-slate-500 text-sm">
-                  {period === thisMonth()
-                    ? "Create a budget plan to get started."
-                    : "There is no budget plan for this month."}
-                </div>
-              </div>
-              {showCreateButton && (
-                <button
-                  className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:opacity-90"
-                  onClick={() => setShowCreate(true)}
-                >
-                  Create Budget Plan
-                </button>
-              )}
-            </div>
-          )
-        )}
-
-        {/* If plan exists */}
-        {plan && (
+        {loading ? (
+          <div className="animate-pulse h-48 rounded-2xl bg-slate-100" />
+        ) : error ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 text-rose-700 p-6">{error}</div>
+        ) : (
           <>
-            <div className="grid grid-cols-12 gap-3">
-              <SummaryCard
-                label="Savings"
-                value={budgets.savings}
-                color={C.indigo}
-                onEdit={() => setShowEditOne("savings")}
-              />
-              <SummaryCard
-                label="Commitments"
-                value={budgets.commitments}
-                color={C.green}
-                onEdit={() => setShowEditOne("commitments")}
-              />
-              <SummaryCard
-                label="Events"
-                value={budgets.events}
-                color={C.teal}
-                onEdit={() => setShowEditOne("events")}
-              />
-              <SummaryCard
-                label="DTD Total"
-                value={budgets.dtdTotal}
-                color={C.amber}
-                disabled
-              />
+            {/* Header/actions */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h1 className="text-3xl font-extrabold text-slate-800">Budget Management</h1>
+                <p className="text-sm text-slate-500">
+                  Manage your monthly budget and track your spending with ease.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={generateSingle}
+                  className="px-3 py-2 rounded-xl border bg-white"
+                  disabled={loadingReport}
+                >
+                  Generate Report
+                </button>
+                <button
+                  className={`btn btn-ghost ${plan ? "" : "opacity-40 cursor-not-allowed"}`}
+                  onClick={() => plan && setShowEditWhole(true)}
+                  disabled={!plan}
+                >
+                  Edit Budget Plan
+                </button>
+                <button
+                  className={`btn btn-primary ${
+                    plan || !canCreateForThisPeriod ? "opacity-40 cursor-not-allowed" : ""
+                  }`}
+                  onClick={() => !plan && canCreateForThisPeriod && setShowCreate(true)}
+                  disabled={!!plan || !canCreateForThisPeriod}
+                >
+                  Add Budget
+                </button>
+              </div>
             </div>
 
-            <DtdTable
-              rows={filtered}
-              total={budgets.dtdTotal}
-              filter={filter}
-              setFilter={setFilter}
-              onEditRow={(r) =>
-                setShowEditDtdOne({
-                  categoryId: r.categoryId,
-                  name: r.name,
-                  alloc: r.alloc,
-                })
-              }
-            />
+            {/* Range Report Section */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-semibold mb-3">Generate Range Report</h2>
+              <div className="flex flex-wrap gap-3 items-end">
+                <div>
+                  <label className="text-sm text-slate-600">Start Month</label>
+                  <input
+                    type="month"
+                    value={startMonth}
+                    onChange={(e) => setStartMonth(e.target.value)}
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-slate-600">End Month</label>
+                  <input
+                    type="month"
+                    value={endMonth}
+                    onChange={(e) => setEndMonth(e.target.value)}
+                    className="rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </div>
+                <button
+                  onClick={generateRange}
+                  disabled={loadingReport}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 text-white"
+                >
+                  Generate Range Report
+                </button>
+              </div>
+            </div>
 
-            <div className="grid grid-cols-12 gap-3">
-              <div className="col-span-12 md:col-span-6">
-                <BudgetPie
-                  modules={modules}
-                  totalBudgeted={totalBudgeted}
-                  unbudgeted={unbudgeted}
+            {/* Period strip navigation */}
+            <PeriodStrip period={period} plan={plan} onPrev={goPrev} onNext={goNext} onChangeBlocked={onChangeBlocked} />
+
+            {/* No plan states */}
+            {!plan && (
+              nextMonthOfToday() === period ? (
+                <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-6 flex items-center justify-between">
+                  <div>
+                    <div className="text-indigo-900 font-semibold">
+                      Get the Budget Forecast for {monthLabel(period)}
+                    </div>
+                    <div className="text-indigo-700/80 text-sm">
+                      See a suggested allocation based on your recent spending and commitments.
+                    </div>
+                  </div>
+                  <button
+                    className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:opacity-90"
+                    onClick={() => (window.location.href = `/budget/forecast?period=${period}`)}
+                  >
+                    Get Forecast
+                  </button>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-white p-6 flex items-center justify-between">
+                  <div>
+                    <div className="text-slate-800 font-semibold">No plan for {monthLabel(period)}</div>
+                    <div className="text-slate-500 text-sm">
+                      {period === thisMonth() ? "Create a budget plan to get started." : "There is no budget plan for this month."}
+                    </div>
+                  </div>
+                  {(!plan && isCurrentPeriod) && (
+                    <button className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:opacity-90" onClick={() => setShowCreate(true)}>
+                      Create Budget Plan
+                    </button>
+                  )}
+                </div>
+              )
+            )}
+
+            {/* Has plan */}
+            {plan && (
+              <>
+                <div className="grid grid-cols-12 gap-3">
+                  <SummaryCard label="Savings" value={budgets.savings} color={C.indigo} onEdit={() => setShowEditOne("savings")} />
+                  <SummaryCard label="Commitments" value={budgets.commitments} color={C.green} onEdit={() => setShowEditOne("commitments")} />
+                  <SummaryCard label="Events" value={budgets.events} color={C.teal} onEdit={() => setShowEditOne("events")} />
+                  <SummaryCard label="DTD Total" value={budgets.dtdTotal} color={C.amber} disabled />
+                </div>
+
+                <DtdTable
+                  rows={filtered}
+                  total={budgets.dtdTotal}
+                  filter={filter}
+                  setFilter={setFilter}
+                  onEditRow={(r) => setShowEditDtdOne({ categoryId: r.categoryId, name: r.name, alloc: r.alloc })}
                 />
-              </div>
-              <div className="col-span-12 md:col-span-6">
-                <CategoryBars data={barData} />
-              </div>
-            </div>
 
-            <DangerZone onDelete={deletePlan} />
+                <div className="grid grid-cols-12 gap-3">
+                  <div className="col-span-12 md:col-span-6">
+                    <BudgetPie modules={modules} totalBudgeted={totalBudgeted} unbudgeted={unbudgeted} />
+                  </div>
+                  <div className="col-span-12 md:col-span-6">
+                    <CategoryBars data={barData} />
+                  </div>
+                </div>
+
+                <DangerZone onDelete={deletePlan} />
+              </>
+            )}
           </>
         )}
       </div>

@@ -1,0 +1,81 @@
+/* Import Google Font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+.privacy-container {
+  position: relative; /* for positioning close button */
+  max-width: 900px;
+  margin: 80px auto;
+  padding: 40px;
+  background-color: #fff;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  font-family: 'Inter', sans-serif;
+  color: #2d2d2d;
+  line-height: 1.75;
+  transition: box-shadow 0.3s ease, transform 0.2s ease;
+}
+
+.privacy-container:hover {
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.2);
+  transform: translateY(-2px);
+}
+
+/* Close button */
+.close-btn {
+  position: absolute;
+  top: 15px;
+  right: 20px;
+  background: transparent;
+  border: none;
+  font-size: 1.8rem;
+  font-weight: bold;
+  color: #555;
+  cursor: pointer;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.close-btn:hover {
+  color: #e63946;
+  transform: scale(1.1);
+}
+
+.privacy-container h1 {
+  text-align: center;
+  font-size: 2.2rem;
+  color: #1a73e8;
+  margin-bottom: 25px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.privacy-container h2 {
+  font-size: 1.4rem;
+  margin-top: 30px;
+  margin-bottom: 15px;
+  color: #1a73e8;
+  font-weight: 600;
+}
+
+.privacy-container p,
+.privacy-container li {
+  font-size: 1rem;
+  margin-bottom: 16px;
+  color: #444;
+}
+
+.privacy-container ul {
+  margin-left: 20px;
+  padding-left: 10px;
+  list-style-type: disc;
+}
+
+.privacy-container a {
+  color: #1a73e8;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.privacy-container a:hover {
+  color: #0b4ca3;
+  text-decoration: underline;
+}

@@ -8,22 +8,21 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-
-const api = axios.create({ baseURL: "http://localhost:4000" });
+import api from "../api/api.js";
 
 /* ------------------------- API facades ------------------------- */
 const Goals = {
-  list: (p = {}) => api.get("/api/savings-goals", { params: p }).then(r => r.data),
-  get: (id) => api.get(`/api/savings-goals/${id}`).then(r => r.data),
-  create: (b) => api.post("/api/savings-goals", b).then(r => r.data),
-  update: (id, b) => api.put(`/api/savings-goals/${id}`, b).then(r => r.data),
-  remove: (id) => api.delete(`/api/savings-goals/${id}`).then(r => r.data),
-  fund: (id, b) => api.post(`/api/savings-goals/${id}/fund`, b).then(r => r.data),
-  withdraw: (id, b) => api.post(`/api/savings-goals/${id}/withdraw`, b).then(r => r.data),
+  list: (p = {}) => api.get("savings-goals", { params: p }).then(r => r.data),
+  get: (id) => api.get(`savings-goals/${id}`).then(r => r.data),
+  create: (b) => api.post("savings-goals", b).then(r => r.data),
+  update: (id, b) => api.put(`savings-goals/${id}`, b).then(r => r.data),
+  remove: (id) => api.delete(`savings-goals/${id}`).then(r => r.data),
+  fund: (id, b) => api.post(`savings-goals/${id}/fund`, b).then(r => r.data),
+  withdraw: (id, b) => api.post(`savings-goals/${id}/withdraw`, b).then(r => r.data),
 };
 
-const Budget = { getPlan: (period) => api.get(`/api/budget/plans/${period}`).then(r => r.data) };
-const Accounts = { list: () => api.get("/api/accounts", { params: { includeArchived: "false" } }).then(r => r.data) };
+const Budget = { getPlan: (period) => api.get(`budget/plans/${period}`).then(r => r.data) };
+const Accounts = { list: () => api.get("accounts", { params: { includeArchived: "false" } }).then(r => r.data) };
 
 /* ------------------------- helpers ------------------------- */
 const LKR = new Intl.NumberFormat("en-LK", { style: "currency", currency: "LKR" });

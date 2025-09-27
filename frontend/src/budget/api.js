@@ -1,69 +1,45 @@
-import axios from "axios";
-export const API = "http://localhost:4000";
-const defaultHeaders = { "x-user-id": "u_demo_1" };
+import api from "../api/api";
 
+/* ----------------------------- BASIC HELPERS ----------------------------- */
+export const centsToAmount = (c) => Number(c || 0) / 100;
+const list = (d) => (Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : []);
+
+/* --------------------------------- READ --------------------------------- */
 export const getPlan = async (period) => {
-  try { const r = await axios.get(`${API}/api/budget/plans/${period}`, { headers: defaultHeaders }); return r.data||null; }
-  catch(e){ if (e?.response?.status===404) return null; throw e; }
+  try {
+    const { data } = await api.get(`budget/plans/${period}`);
+    return data || null;
+  } catch (e) {
+    if (e?.response?.status === 404) return null;
+    throw e;
+  }
 };
-export const getIncomes = async () => {
-  const r = await axios.get(`${API}/api/incomes`, { headers: defaultHeaders });
-  return Array.isArray(r.data) ? r.data : (Array.isArray(r.data?.data)? r.data.data : []);
-};
-export const getExpenses = async () => {
-  const r = await axios.get(`${API}/api/expenses`, { headers: defaultHeaders });
-  return Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data)? r.data : []);
-};
-export const getTransactions = async () => {
-  const r = await axios.get(`${API}/api/commitments`, { headers: defaultHeaders });
-  return Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data)? r.data : []);
-};
-export const getCategories = async () => {
-  const r = await axios.get(`${API}/api/categories`, { headers: defaultHeaders });
-  return Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data)? r.data : []);
-};
-export const getAccounts = async () => {
-  const r = await axios.get(`${API}/api/accounts`, { headers: defaultHeaders });
-  const list = Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data)? r.data : []);
-  return list;
-};
+
+export const getIncomes       = async () => list((await api.get(`incomes`)).data);
+export const getExpenses      = async () => list((await api.get(`expenses`)).data);
+export const getCommitments   = async () => list((await api.get(`commitments`)).data);
+export const getEvents        = async () => list((await api.get(`events`)).data);
+export const getSavingsGoals  = async () => list((await api.get(`savings-goals`)).data);
+export const getCategories    = async () => list((await api.get(`categories`)).data);
+export const getAccounts      = async () => list((await api.get(`accounts`)).data);
+
 export const accountAmount = (a) => {
-  if (a?.balanceCents!=null) return Number(a.balanceCents)/100;
-  if (a?.amountCents!=null) return Number(a.amountCents)/100;
-  for (const v of [a?.balance,a?.amount,a?.available,a?.currentBalance]) {
+  if (a?.balanceCents != null) return Number(a.balanceCents) / 100;
+  if (a?.amountCents  != null) return Number(a.amountCents)  / 100;
+  for (const v of [a?.balance, a?.amount, a?.available, a?.currentBalance]) {
     const n = Number(v); if (!Number.isNaN(n)) return n;
-  } return 0;
+  }
+  return 0;
 };
 
-export const patchPlan = (period, body) =>
-  axios.patch(`${API}/api/budget/plans/${period}`, body, { headers: defaultHeaders });
-export const putDtdSub = (period, categoryId, amount) =>
-  axios.put(`${API}/api/budget/plans/${period}/dtd/${String(categoryId)}`, { amount }, { headers: defaultHeaders });
-export const deletePlanApi = (period) =>
-  axios.delete(`${API}/api/budget/plans/${period}`, { headers: defaultHeaders });
-export const createPlanApi = (payload) =>
-  axios.post(`${API}/api/budget/plans`, payload, { headers: defaultHeaders });
-export const replacePlanApi = (period, payload) =>
-  axios.put(`${API}/api/budget/plans/${period}`, payload, { headers: defaultHeaders });
+/* --------------------------------- WRITE -------------------------------- */
+export const patchPlan      = (period, body) => api.patch(`budget/plans/${period}`, body);
+export const putDtdSub      = (period, categoryId, amount, name) =>
+  api.put(`budget/plans/${period}/dtd/${String(categoryId)}`, { amount, name });
+export const deletePlanApi  = (period) => api.delete(`budget/plans/${period}`);
+export const createPlanApi  = (payload) => api.post(`budget/plans`, payload);
+export const replacePlanApi = (period, payload) => api.put(`budget/plans/${period}`, payload);
 
-export async function getEventExpenses() {
-  try {
-    const r = await axios.get(`${API}/api/events`, { headers: defaultHeaders });
-    const list = Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data) ? r.data : []);
-    return list;
-  } catch {
-    // fall back to empty if route not implemented yet
-    return [];
-  }
-}
-
-// Savings "actual" source (e.g., transfers into savings)
-export async function getSavingsMovements() {
-  try {
-    const r = await axios.get(`${API}/api/savings-goals`, { headers: defaultHeaders });
-    const list = Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data) ? r.data : []);
-    return list;
-  } catch {
-    return [];
-  }
-}
+/* If you still need the raw server origin for <img src> etc.: */
+export const API_BASE =
+  (process.env.REACT_APP_API_URL || "http://localhost:4000/api").replace(/\/api$/, "");

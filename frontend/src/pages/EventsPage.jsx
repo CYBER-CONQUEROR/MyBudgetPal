@@ -1,30 +1,26 @@
 // src/pages/EventsPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import axios from "axios";
-
-/* ===================== AXIOS ===================== */
-const api = axios.create({ baseURL: "http://localhost:4000/api" });
-api.defaults.headers.common["x-user-id"] = "000000000000000000000001";
+import api from "../api/api.js";
 
 /* ===================== API wrappers ===================== */
 const Accounts = {
-  list: () => api.get("/accounts", { params: { includeArchived: "false" } }).then((r) => r.data),
+  list: () => api.get("accounts", { params: { includeArchived: "false" } }).then((r) => r.data),
 };
 
 const Events = {
-  list: () => api.get("/events").then((r) => r.data),
-  create: (b) => api.post("/events", b).then((r) => r.data),
-  update: (id, b) => api.put(`/events/${id}`, b).then((r) => r.data),
-  remove: (id) => api.delete(`/events/${id}`).then((r) => r.data),
-  fund:   (id, b) => api.post(`/events/${id}/fund`, b).then((r) => r.data),
-  defund: (id, b) => api.post(`/events/${id}/defund`, b).then((r) => r.data),
-  spend:  (id, b) => api.post(`/events/${id}/spend`, b).then((r) => r.data),
+  list: () => api.get("events").then((r) => r.data),
+  create: (b) => api.post("events", b).then((r) => r.data),
+  update: (id, b) => api.put(`events/${id}`, b).then((r) => r.data),
+  remove: (id) => api.delete(`events/${id}`).then((r) => r.data),
+  fund:   (id, b) => api.post(`events/${id}/fund`, b).then((r) => r.data),
+  defund: (id, b) => api.post(`events/${id}/defund`, b).then((r) => r.data),
+  spend:  (id, b) => api.post(`events/${id}/spend`, b).then((r) => r.data),
 };
 
 const Budget = {
   getPlan: (period) =>
     api
-      .get(`/budget/plans/${period}`)
+      .get(`budget/plans/${period}`)
       .then((r) => r.data)
       .catch((e) => {
         if (e?.response?.status === 404) return null;
@@ -32,7 +28,7 @@ const Budget = {
       }),
 };
 
-/* ===================== helpers & small UI bits ===================== */
+/* ===================== helpers ===================== */
 const toCents = (n) => Math.round(Number(n || 0) * 100);
 const fromCents = (c) => (Number(c || 0) / 100).toFixed(2);
 const ymd = (x) => (x ? new Date(x).toISOString().slice(0, 10) : "");
@@ -40,12 +36,21 @@ const clamp01 = (n) => Math.max(0, Math.min(1, n));
 const currency = (cents, cur = "LKR") =>
   new Intl.NumberFormat("en-LK", { style: "currency", currency: cur }).format((cents || 0) / 100);
 
-const thisPeriod = () => {
-  const d = new Date();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${d.getFullYear()}-${m}`; // YYYY-MM
+const ymLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+const thisPeriod = () => ymLocal(new Date());
+
+const normalizeDate = (val) => {
+  if (!val) return null;
+  if (val?.$date) return new Date(val.$date); // Mongo extended JSON
+  return new Date(val); // ISO string or Date
 };
 
+const inPeriodLocal = (dt, period) => {
+  const d = normalizeDate(dt);
+  return d instanceof Date && !isNaN(d) && ymLocal(d) === period;
+};
+
+/* ===================== small UI bits ===================== */
 function Field({ label, required, children, hint }) {
   return (
     <label className="block">
@@ -91,7 +96,7 @@ function Bar({ value, max, hard = false }) {
   );
 }
 
-/* ===================== Create/Edit Event Modal (with budget warnings) ===================== */
+/* ===================== Create/Edit Event Modal ===================== */
 function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
   const isEdit = !!initial?._id;
 
@@ -147,9 +152,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
   // Budget context for warnings (not blocking on create; blocking happens on FUND)
   const capC = toCents(Number(budget?.events?.amount || 0));
   const usedC = Number(budget?._usedEventsCents || 0);
-  const earmarkedC = Number(budget?._earmarkedEventsCents || 0); // funded but unspent
+  const earmarkedC = Number(budget?._earmarkedEventsCents || 0);
   const remainingBudgetC = Math.max(0, capC - usedC - earmarkedC);
-
   const showBudgetWarn = capC > 0 && targetCents > remainingBudgetC;
 
   const save = async (e) => {
@@ -158,7 +162,6 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
     if (!f.dueDate) return alert("Due date is required");
     if (!f.primaryAccountId) return alert("Select an account");
     if (insufficientAccount) return alert("Insufficient funds in the selected account to cover the event target.");
-    // Do NOT block on budget at creation; only warn. Funding modal enforces hardCap.
     const payload = {
       title: f.title.trim(),
       mode: f.mode,
@@ -171,7 +174,6 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
       },
       notes: f.notes?.trim() || "",
     };
-
     if (f.mode === "single") {
       payload.targetCents = toCents(f.target);
       payload.subItems = [];
@@ -235,7 +237,9 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
               )}
             </select>
             {selectedAcc && (
-              <p className="text-xs text-slate-500 mt-1">Available: {currency(selectedAcc.balanceCents, selectedAcc.currency || "LKR")}</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Available: {currency(selectedAcc.balanceCents, selectedAcc.currency || "LKR")}
+              </p>
             )}
           </Field>
           <Field label="Currency">
@@ -525,7 +529,6 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
     setNote("");
   }, [open, event, accounts]);
 
-  // Only defundable = funded - spent
   const refundableCents = Math.max(0, (event?.fundedCents || 0) - (event?.spentCents || 0));
   const amountCents = toCents(amount);
   const overRefundable = amountCents > refundableCents;
@@ -819,11 +822,32 @@ export default function EventsPage() {
   const [accounts, setAccounts] = useState([]);
   const [items, setItems] = useState([]);
 
-  // Budget (current period)
-  const period = thisPeriod();
+  // VIEW PERIOD (month scoped by createdAt)
+  const [viewPeriod, setViewPeriod] = useState(thisPeriod()); // YYYY-MM
+  const prevMonth = () => {
+    const [y, m] = viewPeriod.split("-").map(Number);
+    const d = new Date(y, m - 2, 1); // JS months 0-11
+    setViewPeriod(ymLocal(d));
+  };
+  const nextMonth = () => {
+    const [y, m] = viewPeriod.split("-").map(Number);
+    const d = new Date(y, m, 1);
+    setViewPeriod(ymLocal(d));
+  };
+
+  // Budget of the view period
   const [plan, setPlan] = useState(null);
 
-  const [filters, setFilters] = useState({ q: "", mode: "", accountId: "" });
+  // Filters (now includes date filters)
+  const [filters, setFilters] = useState({
+    q: "",
+    mode: "",
+    accountId: "",
+    dateField: "createdAt", // createdAt | due
+    from: "",
+    to: "",
+  });
+
   const [err, setErr] = useState("");
 
   const [open, setOpen] = useState(false);
@@ -836,7 +860,7 @@ export default function EventsPage() {
   const load = async () => {
     setErr("");
     try {
-      const [acc, evs, bp] = await Promise.all([Accounts.list(), Events.list(), Budget.getPlan(period)]);
+      const [acc, evs, bp] = await Promise.all([Accounts.list(), Events.list(), Budget.getPlan(viewPeriod)]);
       setAccounts(acc || []);
       setItems(evs || []);
       setPlan(bp); // could be null
@@ -845,21 +869,28 @@ export default function EventsPage() {
     }
   };
 
+  // load on mount & when viewPeriod changes (so budget plan matches the period)
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [viewPeriod]);
 
-  // ============ Budget usage model ============
-  // We approximate "module spend this month" as total event spend (since backend doesn't expose per-month breakdown).
-  // Earmarked = funded - spent (total). Remaining = cap - used - earmarked.
+  /* ===== Scope events to VIEW PERIOD by createdAt (your requirement) ===== */
+  const scopedByMonth = useMemo(
+    () => items.filter((e) => inPeriodLocal(e.createdAt, viewPeriod)),
+    [items, viewPeriod]
+  );
+
+  /* ===== Budget usage model should also respect the scoped month ===== */
+  // NOTE: backend exposes only total funded/spent per event. For per-month accuracy,
+  // you’d need per-ledger months. For now we approximate by summing within scoped events.
   const usedEventsCents = useMemo(
-    () => items.reduce((sum, e) => sum + Number(e.spentCents || 0), 0),
-    [items]
+    () => scopedByMonth.reduce((sum, e) => sum + Number(e.spentCents || 0), 0),
+    [scopedByMonth]
   );
   const earmarkedEventsCents = useMemo(
-    () => items.reduce((sum, e) => sum + Math.max(0, Number(e.fundedCents || 0) - Number(e.spentCents || 0)), 0),
-    [items]
+    () => scopedByMonth.reduce((sum, e) => sum + Math.max(0, Number(e.fundedCents || 0) - Number(e.spentCents || 0)), 0),
+    [scopedByMonth]
   );
 
   const planWithUsage = useMemo(() => {
@@ -873,10 +904,9 @@ export default function EventsPage() {
 
   const capR = Number(plan?.events?.amount || 0);
   const capC = toCents(capR);
-  const usedR = usedEventsCents / 100;
-  const earmarkedR = earmarkedEventsCents / 100;
   const remainingC = Math.max(0, capC - usedEventsCents - earmarkedEventsCents);
 
+  /* ===== CRUD handlers ===== */
   const onSaveEvent = async (id, body) => {
     try {
       if (id) {
@@ -911,8 +941,8 @@ export default function EventsPage() {
       const acc = await Accounts.list();
       setAccounts(acc || []);
       setFunding(null);
-      // refresh plan usage (earmarked changes)
-      const bp = await Budget.getPlan(period);
+      // refresh plan usage for current viewPeriod
+      const bp = await Budget.getPlan(viewPeriod);
       setPlan(bp);
     } catch (e) {
       alert(e?.response?.data?.detail || e?.message || "Funding failed");
@@ -927,7 +957,7 @@ export default function EventsPage() {
       const acc = await Accounts.list();
       setAccounts(acc || []);
       setDefunding(null);
-      const bp = await Budget.getPlan(period);
+      const bp = await Budget.getPlan(viewPeriod);
       setPlan(bp);
     } catch (e) {
       alert(e?.response?.data?.detail || e?.message || "Remove funds failed");
@@ -940,34 +970,76 @@ export default function EventsPage() {
       const updatedEvent = data?.event || data;
       setItems((prev) => prev.map((x) => (x._id === updatedEvent._id ? updatedEvent : x)));
       setSpending(null);
-      const bp = await Budget.getPlan(period);
+      const bp = await Budget.getPlan(viewPeriod);
       setPlan(bp);
     } catch (e) {
       alert(e?.response?.data?.detail || e?.message || "Spending failed");
     }
   };
 
+  /* ===== Date-based filtering (Created/Due + From/To) applied AFTER month scope ===== */
+  const eventDateForField = (e, field) => {
+    if (field === "due") return e?.dates?.due || null;
+    return e?.createdAt || null;
+  };
+
   const filtered = useMemo(() => {
     const q = filters.q.toLowerCase();
-    return items.filter((e) => {
+    const dateField = filters.dateField; // 'createdAt' or 'due'
+    const from = filters.from ? new Date(filters.from) : null;
+    const to = filters.to ? new Date(filters.to) : null;
+
+    return scopedByMonth.filter((e) => {
       const okQ = !q || [e.title, e.notes].some((s) => (s || "").toLowerCase().includes(q));
       const okMode = !filters.mode || e.mode === filters.mode;
       const okAcc = !filters.accountId || e.primaryAccountId === filters.accountId;
-      return okQ && okMode && okAcc;
+
+      // Date range check on chosen field
+      let okDate = true;
+      if (from || to) {
+        const d = normalizeDate(eventDateForField(e, dateField));
+        if (!(d instanceof Date) || isNaN(d)) {
+          okDate = false;
+        } else {
+          if (from && d < new Date(from.getFullYear(), from.getMonth(), from.getDate())) okDate = false;
+          if (to) {
+            const toEnd = new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999);
+            if (d > toEnd) okDate = false;
+          }
+        }
+      }
+
+      return okQ && okMode && okAcc && okDate;
     });
-  }, [items, filters]);
+  }, [scopedByMonth, filters]);
 
   return (
     <div className="min-h-screen bg-slate-50 py-8">
       <div className="mx-auto max-w-6xl px-4">
+        {/* Header with Month Scope */}
         <header className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Events</h1>
             <p className="text-slate-500 text-sm">
-              Single-amount or itemized events. Fund from accounts, remove unused funds, and record spending.
+              Scoped to <b>{viewPeriod}</b> by <b>Created Month</b>. Events created in other months won’t count here.
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-1">
+              <button className="px-2 py-1 rounded-lg hover:bg-slate-100" onClick={prevMonth}>
+                ◀
+              </button>
+              <div className="px-2 text-sm font-medium">{viewPeriod}</div>
+              <button className="px-2 py-1 rounded-lg hover:bg-slate-100" onClick={nextMonth}>
+                ▶
+              </button>
+              <button
+                className="ml-1 px-2 py-1 rounded-lg text-xs border hover:bg-slate-100"
+                onClick={() => setViewPeriod(thisPeriod())}
+              >
+                This Month
+              </button>
+            </div>
             <button className="px-3 py-2 rounded-xl border" onClick={load}>
               Refresh
             </button>
@@ -983,12 +1055,12 @@ export default function EventsPage() {
           </div>
         </header>
 
-        {/* ---------- Budget Overview (current month) ---------- */}
+        {/* ---------- Budget Overview (viewPeriod) ---------- */}
         <section className="mb-6">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between mb-2">
               <div className="font-medium">
-                Events Budget — <span className="text-slate-600">{period}</span>
+                Events Budget — <span className="text-slate-600">{viewPeriod}</span>
               </div>
               {plan?.events?.hardCap && (
                 <span className="px-2 py-0.5 rounded-full text-xs bg-rose-100 text-rose-700">Hard Cap</span>
@@ -998,7 +1070,7 @@ export default function EventsPage() {
             <div className="grid md:grid-cols-4 gap-4 mb-3">
               <div>
                 <div className="text-xs text-slate-500">Budget</div>
-                <div className="text-slate-900 font-semibold">{currency(capC)}</div>
+                <div className="text-slate-900 font-semibold">{currency(toCents(Number(plan?.events?.amount || 0)))}</div>
               </div>
               <div>
                 <div className="text-xs text-slate-500">Used (spent)</div>
@@ -1014,18 +1086,18 @@ export default function EventsPage() {
               </div>
             </div>
 
-            <Bar value={usedEventsCents + earmarkedEventsCents} max={capC} hard={!!plan?.events?.hardCap} />
+            <Bar value={usedEventsCents + earmarkedEventsCents} max={toCents(Number(plan?.events?.amount || 0))} hard={!!plan?.events?.hardCap} />
 
             {!plan && (
               <div className="mt-2 text-xs text-slate-600">
-                No budget plan found for {period}. Create one under <b>Budget &gt; Plans</b> to track limits.
+                No budget plan found for {viewPeriod}. Create one under <b>Budget &gt; Plans</b> to track limits.
               </div>
             )}
           </div>
         </section>
 
         {/* Filters */}
-        <div className="grid md:grid-cols-4 gap-3 mb-6">
+        <div className="grid md:grid-cols-6 gap-3 mb-6">
           <Field label="Search">
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -1059,6 +1131,32 @@ export default function EventsPage() {
               ))}
             </select>
           </Field>
+          <Field label="Date field">
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={filters.dateField}
+              onChange={(e) => setFilters({ ...filters, dateField: e.target.value })}
+            >
+              <option value="createdAt">Created Date</option>
+              <option value="due">Due Date</option>
+            </select>
+          </Field>
+          <Field label="From">
+            <input
+              type="date"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={filters.from}
+              onChange={(e) => setFilters({ ...filters, from: e.target.value })}
+            />
+          </Field>
+          <Field label="To">
+            <input
+              type="date"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={filters.to}
+              onChange={(e) => setFilters({ ...filters, to: e.target.value })}
+            />
+          </Field>
         </div>
 
         {/* Error */}
@@ -1067,7 +1165,7 @@ export default function EventsPage() {
         {/* Cards */}
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.length === 0 ? (
-            <div className="text-slate-500">No events yet. Click <b>Create Event</b> to get started.</div>
+            <div className="text-slate-500">No events in {viewPeriod}. Click <b>Create Event</b> to get started.</div>
           ) : (
             filtered.map((ev) => (
               <EventCard
@@ -1097,6 +1195,7 @@ export default function EventsPage() {
                 <th className="px-3 py-2 text-right">Target</th>
                 <th className="px-3 py-2 text-right">Funded</th>
                 <th className="px-3 py-2 text-right">Spent</th>
+                <th className="px-3 py-2 text-left">Created</th>
                 <th className="px-3 py-2 text-left">Due</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
@@ -1104,7 +1203,7 @@ export default function EventsPage() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">
+                  <td colSpan={9} className="px-3 py-6 text-center text-slate-500">
                     No events
                   </td>
                 </tr>
@@ -1121,6 +1220,7 @@ export default function EventsPage() {
                       <td className="px-3 py-2 text-right">{currency(e.targetCents, e.currency || "LKR")}</td>
                       <td className="px-3 py-2 text-right">{currency(e.fundedCents, e.currency || "LKR")}</td>
                       <td className="px-3 py-2 text-right">{currency(e.spentCents, e.currency || "LKR")}</td>
+                      <td className="px-3 py-2">{e?.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—"}</td>
                       <td className="px-3 py-2">{e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—"}</td>
                       <td className="px-3 py-2 text-right space-x-3">
                         <button className="text-blue-600 hover:underline" onClick={() => { setEditing(e); setOpen(true); }}>

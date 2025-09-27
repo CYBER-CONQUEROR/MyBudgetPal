@@ -1,39 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Plus,
-  PencilLine,
-  Archive,
-  Search,
-  Building2,
-  ChevronDown,
-  Trash2,
-  ArrowRightLeft,
-  ArrowDownCircle,
-  ArrowUpCircle,
-  Banknote,
-  CreditCard,
-  Wallet,
-  Eye,
+  Plus, PencilLine, Archive, Search, Building2, ChevronDown, Trash2,
+  ArrowRightLeft, ArrowDownCircle, ArrowUpCircle, Banknote, CreditCard, Wallet, Eye,
 } from "lucide-react";
+import api from "../api/api.js"; // axios instance with baseURL=/api and withCredentials:true
 
-/**
- * AccountsPage
- * - Server mount: app.use("/api/accounts", accountRoutes)
- * - UI can create/edit: bank or card only (NO cash create)
- * - Create form includes Opening Balance (LKR) -> openingBalanceCents
- * - Shows current balance on cards & details modal
- * - Transfer (any→any), Deposit (Cash→Bank), Withdraw (Bank→Cash)
- * - Archive / Unarchive / Delete wired
- * - Cash wallet: view-only (no Edit/Archive/Delete)
- *
- * Props:
- *   API?: origin like "http://localhost:4000" (default)
- *   headers?: object (e.g. { "x-user-id": "...", Authorization: "Bearer ..." })
- */
-export default function AccountsPage({
-  API = "http://localhost:4000",
-  headers = { "x-user-id": "000000000000000000000001" }, // demo default
-}) {
+export default function AccountsPage() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -53,69 +25,29 @@ export default function AccountsPage({
   const [action, setAction] = useState(null); // { type: 'transfer'|'deposit'|'withdraw' }
   const [details, setDetails] = useState(null);
 
-  const url = (suffix = "") => `${API}/api/accounts${suffix}`;
-
   // Sri Lanka institutions (editable)
   const banksLK = [
-    "Bank of Ceylon (BOC)",
-    "People's Bank",
-    "National Savings Bank (NSB)",
-    "Commercial Bank of Ceylon",
-    "Hatton National Bank (HNB)",
-    "Sampath Bank",
-    "Seylan Bank",
-    "DFCC Bank",
-    "Nations Trust Bank",
-    "NDB Bank (National Development Bank)",
-    "Pan Asia Bank",
-    "Union Bank of Colombo",
-    "Cargills Bank",
-    "Amãna Bank",
-    "HSBC Sri Lanka",
-    "Standard Chartered Sri Lanka",
-    "Citibank Sri Lanka",
-    "State Bank of India - Sri Lanka",
-    "Indian Bank - Sri Lanka",
-    "Indian Overseas Bank - Sri Lanka",
-    "Habib Bank Ltd (HBL)",
-    "MCB Bank",
-    "Public Bank Berhad - Sri Lanka",
-    "Other",
+    "Bank of Ceylon (BOC)", "People's Bank", "National Savings Bank (NSB)",
+    "Commercial Bank of Ceylon", "Hatton National Bank (HNB)", "Sampath Bank",
+    "Seylan Bank", "DFCC Bank", "Nations Trust Bank", "NDB Bank (National Development Bank)",
+    "Pan Asia Bank", "Union Bank of Colombo", "Cargills Bank", "Amãna Bank",
+    "HSBC Sri Lanka", "Standard Chartered Sri Lanka", "Citibank Sri Lanka",
+    "State Bank of India - Sri Lanka", "Indian Bank - Sri Lanka", "Indian Overseas Bank - Sri Lanka",
+    "Habib Bank Ltd (HBL)", "MCB Bank", "Public Bank Berhad - Sri Lanka", "Other",
   ];
-
-  // Fetch helper
-  const request = async (fullUrl, opts = {}) => {
-    const res = await fetch(fullUrl, {
-      ...opts,
-      headers: { "Content-Type": "application/json", ...headers },
-    });
-    const text = await res.text();
-    let payload = null;
-    try {
-      payload = text ? JSON.parse(text) : null;
-    } catch {
-      payload = text || null;
-    }
-    if (!res.ok) {
-      const msg =
-        (payload && (payload.detail || payload.message)) || `HTTP ${res.status}`;
-      const err = new Error(msg);
-      err.status = res.status;
-      throw err;
-    }
-    return payload ?? {};
-  };
 
   // Load
   const load = async () => {
     try {
       setLoading(true);
       setError("");
-      const qs = `?includeArchived=${showArchived ? "true" : "false"}`;
-      const data = await request(url(`${qs}`));
-      setAccounts(Array.isArray(data) ? data : []);
+      const { data } = await api.get("accounts", {
+        params: { includeArchived: showArchived ? "true" : "false" },
+      });
+      const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+      setAccounts(list);
     } catch (e) {
-      setError(e.message || "Failed to load accounts");
+      setError(e?.response?.data?.message || e.message || "Failed to load accounts");
     } finally {
       setLoading(false);
     }
@@ -124,7 +56,7 @@ export default function AccountsPage({
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [API, showArchived]);
+  }, [showArchived]);
 
   // Filters
   const institutionsInData = useMemo(() => {
@@ -149,122 +81,89 @@ export default function AccountsPage({
   }, [accounts, q, typeFilter, instFilter, showArchived]);
 
   // Actions
-  const onCreate = () => {
-    setEditing(null);
-    setModalOpen(true);
-  };
-  const onEdit = (acc) => {
-    setEditing(acc);
-    setModalOpen(true);
-  };
-  const onAskArchive = (acc) => {
-    setToArchive(acc);
-    setConfirmOpen(true);
-  };
-  const onAskDelete = (acc) => {
-    setToDelete(acc);
-    setConfirmDeleteOpen(true);
-  };
+  const onCreate = () => { setEditing(null); setModalOpen(true); };
+  const onEdit = (acc) => { setEditing(acc); setModalOpen(true); };
 
   const onView = async (acc) => {
     try {
-      const data = await request(url(`/${acc._id}`));
+      const { data } = await api.get(`accounts/${acc._id}`);
       setDetails(data);
     } catch (e) {
-      alert(e.message || "Failed to load details");
+      alert(e?.response?.data?.message || e.message || "Failed to load details");
     }
   };
 
   const handleSave = async (payload, id) => {
     try {
       if (id) {
-        await request(url(`/${id}`), {
-          method: "PATCH",
-          body: JSON.stringify(payload),
-        });
+        await api.patch(`accounts/${id}`, payload);
       } else {
-        await request(url(), {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
+        await api.post("accounts", payload);
       }
       setModalOpen(false);
       setEditing(null);
       await load();
     } catch (e) {
-      alert(e.message || "Save failed");
+      alert(e?.response?.data?.message || e.message || "Save failed");
     }
   };
 
   const handleArchive = async (id) => {
     try {
-      await request(url(`/${id}/archive`), { method: "POST" });
+      await api.post(`accounts/${id}/archive`);
       setConfirmOpen(false);
       setToArchive(null);
       await load();
     } catch (e) {
-      alert(e.message || "Archive failed");
+      alert(e?.response?.data?.message || e.message || "Archive failed");
     }
   };
 
   const handleUnarchive = async (id) => {
     try {
-      await request(url(`/${id}/unarchive`), { method: "POST" });
+      await api.post(`accounts/${id}/unarchive`);
       await load();
     } catch (e) {
-      alert(e.message || "Unarchive failed");
+      alert(e?.response?.data?.message || e.message || "Unarchive failed");
     }
   };
 
   const handleDelete = async (id) => {
     try {
-      await request(url(`/${id}`), { method: "DELETE" });
+      await api.delete(`accounts/${id}`);
       setConfirmDeleteOpen(false);
       setToDelete(null);
       await load();
     } catch (e) {
-      alert(e.message || "Delete failed");
+      alert(e?.response?.data?.message || e.message || "Delete failed");
     }
   };
 
   // Money movement
   const handleTransfer = async (fromId, toId, amountCents) => {
     try {
-      await request(url(`/transfer`), {
-        method: "POST",
-        body: JSON.stringify({
-          fromAccountId: fromId,
-          toAccountId: toId,
-          amountCents,
-        }),
-      });
+      await api.post("accounts/transfer", { fromAccountId: fromId, toAccountId: toId, amountCents });
       await load();
     } catch (e) {
-      alert(e.message || "Transfer failed");
+      alert(e?.response?.data?.message || e.message || "Transfer failed");
     }
   };
 
   const handleDeposit = async (bankId, amountCents) => {
     try {
-      await request(url(`/${bankId}/deposit`), {
-        method: "POST",
-        body: JSON.stringify({ amountCents }),
-      });
+      await api.post(`accounts/${bankId}/deposit`, { amountCents });
       await load();
     } catch (e) {
-      alert(e.message || "Deposit failed (ensure Cash wallet exists)");
+      alert(e?.response?.data?.message || e.message || "Deposit failed (ensure Cash wallet exists)");
     }
   };
 
   const handleWithdraw = async (bankId, amountCents) => {
     try {
-      await request(url(`/${bankId}/withdraw`), {
-        method: "POST",
-        body: JSON.stringify({ amountCents }),
-      });
+      await api.post(`accounts/${bankId}/withdraw`, { amountCents });
       await load();
     } catch (e) {
-      alert(e.message || "Withdraw failed (ensure Cash wallet exists)");
+      alert(e?.response?.data?.message || e.message || "Withdraw failed (ensure Cash wallet exists)");
     }
   };
 
@@ -282,28 +181,16 @@ export default function AccountsPage({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={onCreate}
-              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]"
-            >
+            <button onClick={onCreate} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]">
               <Plus size={18} /> Add Account
             </button>
-            <button
-              onClick={() => setAction({ type: "transfer" })}
-              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]"
-            >
+            <button onClick={() => setAction({ type: "transfer" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]">
               <ArrowRightLeft size={18} /> Transfer
             </button>
-            <button
-              onClick={() => setAction({ type: "deposit" })}
-              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]"
-            >
+            <button onClick={() => setAction({ type: "deposit" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]">
               <ArrowDownCircle size={18} /> Deposit
             </button>
-            <button
-              onClick={() => setAction({ type: "withdraw" })}
-              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]"
-            >
+            <button onClick={() => setAction({ type: "withdraw" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]">
               <ArrowUpCircle size={18} /> Withdraw
             </button>
           </div>
@@ -333,10 +220,7 @@ export default function AccountsPage({
                 <option value="card">Card</option>
                 <option value="cash">Cash</option>
               </select>
-              <ChevronDown
-                size={16}
-                className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500"
-              />
+              <ChevronDown size={16} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500" />
             </div>
 
             <div className="relative">
@@ -347,15 +231,10 @@ export default function AccountsPage({
               >
                 <option>All Institutions</option>
                 {Array.from(new Set([...banksLK, ...institutionsInData])).map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
+                  <option key={b} value={b}>{b}</option>
                 ))}
               </select>
-              <ChevronDown
-                size={16}
-                className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500"
-              />
+              <ChevronDown size={16} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500" />
             </div>
 
             <label className="flex items-center gap-2 select-none">
@@ -363,15 +242,9 @@ export default function AccountsPage({
               <button
                 type="button"
                 onClick={() => setShowArchived((s) => !s)}
-                className={`h-6 w-11 rounded-full p-[2px] transition ${
-                  showArchived ? "bg-blue-600" : "bg-slate-300"
-                }`}
+                className={`h-6 w-11 rounded-full p-[2px] transition ${showArchived ? "bg-blue-600" : "bg-slate-300"}`}
               >
-                <span
-                  className={`block h-5 w-5 rounded-full bg-white shadow transition ${
-                    showArchived ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
+                <span className={`block h-5 w-5 rounded-full bg-white shadow transition ${showArchived ? "translate-x-5" : "translate-x-0"}`} />
               </button>
             </label>
           </div>
@@ -381,10 +254,7 @@ export default function AccountsPage({
         <div className="mt-6">
           {error && (
             <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
-              {error}{" "}
-              <button onClick={load} className="ml-2 underline">
-                Retry
-              </button>
+              {error} <button onClick={load} className="ml-2 underline">Retry</button>
             </div>
           )}
 
@@ -400,9 +270,9 @@ export default function AccountsPage({
                   account={a}
                   onView={() => onView(a)}
                   onEdit={() => onEdit(a)}
-                  onArchive={() => onAskArchive(a)}
+                  onArchive={() => { setToArchive(a); setConfirmOpen(true); }}
                   onUnarchive={() => handleUnarchive(a._id)}
-                  onDelete={() => onAskDelete(a)}
+                  onDelete={() => { setToDelete(a); setConfirmDeleteOpen(true); }}
                 />
               ))}
             </div>
@@ -415,10 +285,7 @@ export default function AccountsPage({
         <AccountFormModal
           banks={banksLK}
           initial={editing}
-          onClose={() => {
-            setModalOpen(false);
-            setEditing(null);
-          }}
+          onClose={() => { setModalOpen(false); setEditing(null); }}
           onSave={handleSave}
         />
       )}
@@ -430,10 +297,7 @@ export default function AccountsPage({
           message="Archiving hides this account. You can unarchive any time."
           confirmLabel="Archive"
           variant="danger"
-          onCancel={() => {
-            setConfirmOpen(false);
-            setToArchive(null);
-          }}
+          onCancel={() => { setConfirmOpen(false); setToArchive(null); }}
           onConfirm={() => handleArchive(toArchive._id)}
         />
       )}
@@ -445,10 +309,7 @@ export default function AccountsPage({
           message="This will permanently delete the account. You can’t undo this action."
           confirmLabel="Delete"
           variant="danger"
-          onCancel={() => {
-            setConfirmDeleteOpen(false);
-            setToDelete(null);
-          }}
+          onCancel={() => { setConfirmDeleteOpen(false); setToDelete(null); }}
           onConfirm={() => handleDelete(toDelete._id)}
         />
       )}
@@ -648,6 +509,7 @@ function SkeletonGrid() {
   );
 }
 
+/* ---------- Modals ---------- */
 /* ---------- Modals ---------- */
 
 // Create / Edit (create shows Opening Balance)

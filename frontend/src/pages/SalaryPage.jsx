@@ -1,20 +1,55 @@
-import React, { useEffect, useMemo, useState } from "react";
+// src/pages/SalaryPage.jsx
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { Plus, PencilLine, Trash2, Search, Calendar, Banknote } from "lucide-react";
+import api from "../api/api.js"; // axios instance with baseURL (/api) + withCredentials:true
 
-/**
- * IncomePage
- * - Lists/filter incomes
- * - Create/Edit/Delete with balance sync (backend handles)
- * - Filters' date pickers clamp to oldest/latest income dates
- * - FORM date picker clamps to CURRENT MONTH ONLY (as requested)
- */
-export default function IncomePage({
-  API = "http://localhost:4000",
-  headers = { "x-user-id": "000000000000000000000001" },
-}) {
-  const url = (s = "") => `${API}/api/incomes${s}`;
-  const accUrl = (s = "") => `${API}/api/accounts${s}`;
+/* -------------------- API helpers (Axios) -------------------- */
+const asList = (res) =>
+  Array.isArray(res?.data?.data) ? res.data.data : Array.isArray(res?.data) ? res.data : [];
 
+const incomesAPI = {
+  list: async (params = {}) => asList(await api.get("incomes", { params })),
+  create: async (payload) => {
+    try {
+      const res = await api.post("incomes", payload);
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      throw new Error(msg || "Failed to create income");
+    }
+  },
+  update: async (id, payload) => {
+    try {
+      const res = await api.patch(`incomes/${id}`, payload);
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      throw new Error(msg || "Failed to update income");
+    }
+  },
+  remove: async (id) => {
+    try {
+      const res = await api.delete(`incomes/${id}`);
+      return res.data;
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
+      throw new Error(msg || "Failed to delete income");
+    }
+  },
+};
+
+const accountsAPI = {
+  list: async () => asList(await api.get("accounts", { params: { includeArchived: "false" } })),
+};
+
+/* -------------------- Utils -------------------- */
+const fmtLKR = (cents) => {
+  const rupees = Number(cents || 0) / 100;
+  return `LKR ${rupees.toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : "—");
+
+export default function SalaryPage() {
   const [incomes, setIncomes] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -34,45 +69,33 @@ export default function IncomePage({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [toDelete, setToDelete] = useState(null);
 
-  const request = async (fullUrl, opts = {}) => {
-    const res = await fetch(fullUrl, { ...opts, headers: { "Content-Type": "application/json", ...headers } });
-    const text = await res.text();
-    let payload = null;
-    try { payload = text ? JSON.parse(text) : null; } catch { payload = text || null; }
-    if (!res.ok) {
-      const msg = (payload && (payload.detail || payload.message)) || `HTTP ${res.status}`;
-      const e = new Error(msg); e.status = res.status; throw e;
-    }
-    return payload ?? {};
-  };
-
-  // Load list with filters
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true); setErr("");
     try {
-      const accs = await request(accUrl("?includeArchived=false"));
+      const accs = await accountsAPI.list();
       setAccounts(accs || []);
 
-      const qs = new URLSearchParams();
-      if (accountFilter !== "All") qs.set("accountId", accountFilter);
-      if (from) qs.set("from", from);
-      if (to) qs.set("to", to);
-      if (q.trim()) qs.set("q", q.trim());
-      const list = await request(url(qs.toString() ? `?${qs.toString()}` : ""));
+      const params = {};
+      if (accountFilter !== "All") params.accountId = accountFilter;
+      if (from) params.from = from;
+      if (to) params.to = to;
+      if (q.trim()) params.q = q.trim();
+
+      const list = await incomesAPI.list(params);
       setIncomes(Array.isArray(list) ? list : []);
     } catch (e) {
       setErr(e.message || "Failed to load");
     } finally {
       setLoading(false);
     }
-  };
+  }, [accountFilter, from, to, q]);
 
   // Load global bounds (oldest & latest income) for FILTERS
-  const loadBounds = async () => {
+  const loadBounds = useCallback(async () => {
     try {
-      const all = await request(url()); // unfiltered (server caps to reasonable size)
+      const all = await incomesAPI.list(); // unfiltered (server may cap)
       if (Array.isArray(all) && all.length) {
-        const ds = all.map(i => i.date ? new Date(i.date) : null).filter(d => d && !Number.isNaN(+d));
+        const ds = all.map(i => (i.date ? new Date(i.date) : null)).filter(d => d && !Number.isNaN(+d));
         if (ds.length) {
           const min = new Date(Math.min(...ds));
           const max = new Date(Math.max(...ds));
@@ -87,10 +110,10 @@ export default function IncomePage({
     } catch {
       setMinDate(""); setMaxDate("");
     }
-  };
+  }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [API, accountFilter, from, to]);
-  useEffect(() => { loadBounds(); /* eslint-disable-next-line */ }, [API]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadBounds(); }, [loadBounds]);
 
   const filtered = useMemo(() => {
     if (!q.trim()) return incomes;
@@ -107,16 +130,24 @@ export default function IncomePage({
   const onAskDelete = (row) => { setToDelete(row); setConfirmOpen(true); };
 
   const handleSave = async (payload, id) => {
-    if (id) await request(url(`/${id}`), { method: "PATCH", body: JSON.stringify(payload) });
-    else    await request(url(),        { method: "POST",  body: JSON.stringify(payload) });
-    setModalOpen(false); setEditing(null);
-    await load(); await loadBounds();
+    try {
+      if (id) await incomesAPI.update(id, payload);
+      else    await incomesAPI.create(payload);
+      setModalOpen(false); setEditing(null);
+      await load(); await loadBounds();
+    } catch (e) {
+      alert(e.message || "Save failed");
+    }
   };
 
   const handleDelete = async (id) => {
-    await request(url(`/${id}`), { method: "DELETE" });
-    setConfirmOpen(false); setToDelete(null);
-    await load(); await loadBounds();
+    try {
+      await incomesAPI.remove(id);
+      setConfirmOpen(false); setToDelete(null);
+      await load(); await loadBounds();
+    } catch (e) {
+      alert(e.message || "Delete failed");
+    }
   };
 
   const totalCents = filtered.reduce((s, x) => s + (x.amountCents || 0), 0);
@@ -269,13 +300,6 @@ export default function IncomePage({
     </div>
   );
 }
-
-/* ---------- helpers ---------- */
-const fmtLKR = (cents) => {
-  const rupees = Number(cents || 0) / 100;
-  return `LKR ${rupees.toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-};
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : "—");
 
 /* ---------- Modals ---------- */
 

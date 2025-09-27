@@ -1,194 +1,106 @@
-// controllers/category.controller.js
+// controllers/categoryController.js
 import mongoose from "mongoose";
 import Category from "./categoryModel.js";
-// ⬇️ Adjust this import to your actual Expense model path
-import Expense from "./expense.js";
+// If you also need to reassign expenses, adjust this import path:
+// import Expense from "../dayToDayExpenses/expense.js";
 
 const isObjectId = (v) => mongoose.isValidObjectId(v);
 
-const problem = ({ status = 400, title = "Bad Request", detail }) => ({
-  type: "about:blank",
-  title,
-  status,
-  detail,
-});
-
-/** GET /api/categories  -> list (this user's, sorted) */
+/** GET /api/categories */
 export const listCategories = async (req, res) => {
   try {
-    const userId = req.userId; // must be an ObjectId (your middleware already sets this)
-    const cats = await Category.find({ userId })
-      .sort({ name: 1 })
-      .collation({ locale: "en", strength: 2 });
+    const cats = await Category.find({ userId: req.userId }).sort({ nameLower: 1 });
     res.json({ success: true, data: cats });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 };
 
-/** POST /api/categories  -> create */
+/** POST /api/categories { name, color? } */
 export const createCategory = async (req, res) => {
   try {
-    const userId = req.userId;
-    const name = (req.body?.name || "").trim();
+    const name = String(req.body?.name || "").trim();
     const color = (req.body?.color ?? "").toString();
+    if (!name) return res.status(400).json({ success: false, error: "Name is required" });
 
-    if (!name) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Name is required" });
-    }
-
-    // case-insensitive duplicate check for this user
-    const exists = await Category.findOne({ userId, name }).collation({
-      locale: "en",
-      strength: 2,
-    });
-    if (exists) {
-      return res
-        .status(409)
-        .json({ success: false, error: "Category already exists" });
-    }
-
-    const created = await Category.create({ userId, name, color });
+    const created = await Category.create({ userId: req.userId, name, color });
     res.status(201).json({ success: true, data: created });
   } catch (e) {
-    // unique index collision fallback
     if (e?.code === 11000) {
-      return res
-        .status(409)
-        .json({ success: false, error: "Category already exists" });
+      return res.status(409).json({ success: false, error: "Category already exists" });
     }
-    res.status(500).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, error: "Failed to create category" });
   }
 };
 
-/** PUT /api/categories/:id  -> rename / recolor */
+/** PUT /api/categories/:id  { name?, color? } */
 export const updateCategory = async (req, res) => {
   try {
-    const userId = req.userId;
     const { id } = req.params;
-    if (!isObjectId(id)) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Invalid category id" });
+    if (!isObjectId(id)) return res.status(400).json({ success: false, error: "Invalid category id" });
+
+    const cat = await Category.findOne({ _id: id, userId: req.userId });
+    if (!cat) return res.status(404).json({ success: false, error: "Not found" });
+
+    const nextName = typeof req.body?.name === "string" ? req.body.name.trim() : null;
+    const nextColor = typeof req.body?.color === "string" ? req.body.color : null;
+
+    if (nextName !== null) {
+      if (!nextName) return res.status(400).json({ success: false, error: "Name cannot be empty" });
+      cat.name = nextName; // will recalc nameLower & tenantKey on save
     }
+    if (nextColor !== null) cat.color = nextColor;
 
-    const nextNameRaw = req.body?.name;
-    const nextColor = req.body?.color;
-
-    const cat = await Category.findOne({ _id: id, userId });
-    if (!cat) {
-      return res.status(404).json({ success: false, error: "Not found" });
-    }
-
-    const updates = {};
-    let renamedFrom = null;
-
-    if (typeof nextColor === "string") {
-      updates.color = nextColor;
-    }
-
-    if (typeof nextNameRaw === "string") {
-      const nextName = nextNameRaw.trim();
-      if (!nextName) {
-        return res
-          .status(400)
-          .json({ success: false, error: "Name cannot be empty" });
+    try {
+      await cat.save();
+    } catch (e) {
+      if (e?.code === 11000) {
+        return res.status(409).json({ success: false, error: "Category already exists" });
       }
-
-      // case-insensitive compare
-      if (nextName.toLowerCase() !== cat.name.toLowerCase()) {
-        const dup = await Category.findOne({ userId, name: nextName }).collation(
-          { locale: "en", strength: 2 }
-        );
-        if (dup) {
-          return res
-            .status(409)
-            .json({ success: false, error: "Category already exists" });
-        }
-        renamedFrom = cat.name;
-        updates.name = nextName;
-      }
+      throw e;
     }
 
-    if (Object.keys(updates).length > 0) {
-      await Category.updateOne({ _id: id, userId }, { $set: updates });
-      // cascade rename to THIS user's expenses if you still store category as string
-      if (renamedFrom) {
-        await Expense.updateMany(
-          { userId, category: renamedFrom },
-          { $set: { category: updates.name } }
-        );
-      }
-    }
-
-    const fresh = await Category.findById(id);
-    res.json({ success: true, data: fresh });
+    res.json({ success: true, data: cat });
   } catch (e) {
-    if (e?.code === 11000) {
-      return res
-        .status(409)
-        .json({ success: false, error: "Category already exists" });
-    }
-    res.status(500).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, error: e.message || "Failed to update category" });
   }
 };
 
-/** DELETE /api/categories/:id?reassign=<nameOrId>
- *  - Reassign this user's expenses from the deleted category to another category.
- *  - If `reassign` not provided or not found, fall back to "Other" (auto-create if missing).
+/** DELETE /api/categories/:id?reassign=<targetIdOrName>
+ * Optionally reassign related docs before delete.
+ * If you don't need reassignment, you can remove that part.
  */
 export const deleteCategory = async (req, res) => {
   try {
-    const userId = req.userId;
     const { id } = req.params;
-    if (!isObjectId(id)) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Invalid category id" });
-    }
+    if (!isObjectId(id)) return res.status(400).json({ success: false, error: "Invalid category id" });
 
-    const cat = await Category.findOne({ _id: id, userId });
-    if (!cat) {
-      return res.status(404).json({ success: false, error: "Not found" });
-    }
+    const cat = await Category.findOne({ _id: id, userId: req.userId });
+    if (!cat) return res.status(404).json({ success: false, error: "Not found" });
 
-    // resolve reassignment target
-    const reassignParam = (req.query?.reassign || "").trim();
-
-    let target = null;
-    if (reassignParam) {
-      if (isObjectId(reassignParam)) {
-        target = await Category.findOne({ _id: reassignParam, userId });
-      } else {
-        target = await Category.findOne({ userId, name: reassignParam }).collation(
-          { locale: "en", strength: 2 }
-        );
-      }
-    }
-
-    // fallback to "Other" (create if missing)
-    if (!target) {
-      target =
-        (await Category.findOne({ userId, name: "Other" }).collation({
-          locale: "en",
-          strength: 2,
-        })) ||
-        (await Category.create({ userId, name: "Other", color: "#9CA3AF" }));
-    }
-
-    // Reassign THIS user's expenses (string-based category)
-    if (cat.name !== target.name) {
-      await Expense.updateMany(
-        { userId, category: cat.name },
-        { $set: { category: target.name } }
-      );
-    }
+    // --- Optional reassignment example (uncomment and adjust if you have Expense model) ---
+    // const reassign = String(req.query?.reassign || "").trim();
+    // let target = null;
+    // if (reassign) {
+    //   if (isObjectId(reassign)) {
+    //     target = await Category.findOne({ _id: reassign, userId: req.userId });
+    //   } else {
+    //     target = await Category.findOne({ userId: req.userId, nameLower: reassign.toLowerCase() });
+    //   }
+    // }
+    // if (!target) {
+    //   target =
+    //     (await Category.findOne({ userId: req.userId, nameLower: "other" })) ||
+    //     (await Category.create({ userId: req.userId, name: "Other", color: "#9CA3AF" }));
+    // }
+    // await Expense.updateMany(
+    //   { userId: req.userId, categoryId: cat._id },
+    //   { $set: { categoryId: target._id } }
+    // );
 
     await cat.deleteOne();
-    res.json({ success: true, reassignTo: target });
+    res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, error: e.message || "Failed to delete category" });
   }
 };

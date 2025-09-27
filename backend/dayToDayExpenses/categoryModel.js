@@ -2,21 +2,29 @@
 import mongoose from "mongoose";
 const { Schema, Types } = mongoose;
 
-const categorySchema = new Schema(
+/**
+ * Category with per-user uniqueness enforced via a single-field unique key (tenantKey).
+ * tenantKey = `${userId}:${nameLower}` so two different users can both have "Groceries".
+ * Renames are simple (save recalculates tenantKey). No compound or collation indexes needed.
+ */
+const CategorySchema = new Schema(
   {
-    // IMPORTANT: store as ObjectId to match the rest of your app
-    userId: { type: Types.ObjectId, required: true, index: true },
-    name:   { type: String, required: true, trim: true },
-    // optional
-    color:  { type: String, default: "" },
+    userId:     { type: Types.ObjectId, ref: "User", required: true, index: true },
+    name:       { type: String, required: true, trim: true, maxlength: 60 },
+    nameLower:  { type: String, required: true, trim: true, lowercase: true },
+    color:      { type: String, default: "" },
+
+    // Single-field unique key = `${userId}:${nameLower}`
+    tenantKey:  { type: String, required: true, unique: true, index: true },
   },
   { timestamps: true }
 );
 
-// unique per user, case-insensitive (Food === food)
-categorySchema.index(
-  { userId: 1, name: 1 },
-  { unique: true, collation: { locale: "en", strength: 2 } }
-);
+// Keep derived fields in sync
+CategorySchema.pre("validate", function(next) {
+  if (this.name) this.nameLower = this.name.toLowerCase();
+  if (this.userId && this.nameLower) this.tenantKey = `${this.userId}:${this.nameLower}`;
+  next();
+});
 
-export default mongoose.model("Category", categorySchema);
+export default mongoose.model("Category", CategorySchema);

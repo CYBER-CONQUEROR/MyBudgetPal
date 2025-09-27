@@ -1,17 +1,19 @@
+// src/pages/bank.js
 import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/api.js";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
+/* ===================== API ===================== */
 const Accounts = {
   list: () => api.get("accounts", { params: { includeArchived: "false" } }).then(r => r.data),
 };
-
 const Commitments = {
   list: (p = {}) => api.get("commitments", { params: p }).then(r => r.data),
   create: (b) => api.post("commitments", b).then(r => r.data),
   update: (id, b) => api.put(`commitments/${id}`, b).then(r => r.data),
   remove: (id) => api.delete(`commitments/${id}`).then(r => r.data),
 };
-
 const Budget = {
   getPlan: (period) => api.get(`budget/plans/${period}`).then(r => r.data).catch((e) => {
     if (e?.response?.status === 404) return null; // no plan for this month
@@ -19,15 +21,13 @@ const Budget = {
   }),
 };
 
-/* ---------- helpers ---------- */
+/* ===================== helpers ===================== */
 const LKR = new Intl.NumberFormat("en-LK", { style: "currency", currency: "LKR" });
 const toCents = (n) => Math.round(Number(n || 0) * 100);
 const fromCents = (c) => (Number(c || 0) / 100).toFixed(2);
 const ymd = (x) => (x ? new Date(x).toISOString().slice(0, 10) : "");
-const getAccount = (accounts, id) => accounts.find(a => a._id === id);
 const cents = (n) => Math.round(Number(n || 0) * 100);
 const clamp01 = (n) => Math.max(0, Math.min(1, n));
-
 const thisPeriod = () => {
   const d = new Date();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -39,8 +39,9 @@ const isInPeriod = (date, period) => {
   const p = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   return p === period;
 };
+const formatDate = (iso) => iso ? new Date(iso).toLocaleDateString() : "";
 
-/* ---------- small UI bits ---------- */
+/* ===================== small UI bits ===================== */
 function Field({ label, required, children, hint }) {
   return (
     <label className="block">
@@ -53,11 +54,11 @@ function Field({ label, required, children, hint }) {
   );
 }
 
-function Modal({ open, onClose, title, children }) {
+function Modal({ open, onClose, title, children, wide = false }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl border border-slate-200" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-white rounded-2xl w-full ${wide ? 'max-w-5xl' : 'max-w-2xl'} shadow-xl border border-slate-200`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
           <h3 className="text-lg font-semibold">{title}</h3>
           <button onClick={onClose} className="text-slate-500 hover:text-slate-700 text-xl" aria-label="Close">×</button>
@@ -68,7 +69,7 @@ function Modal({ open, onClose, title, children }) {
   );
 }
 
-function Bar({ value, max, hard=false }) {
+function Bar({ value, max, hard = false }) {
   const pct = max > 0 ? (value / max) : 0;
   const w = `${clamp01(pct) * 100}%`;
   const color = pct <= 0.85 ? "bg-emerald-500" : pct <= 1 ? "bg-amber-500" : "bg-rose-500";
@@ -80,7 +81,146 @@ function Bar({ value, max, hard=false }) {
   );
 }
 
-/* ---------- Form ---------- */
+/* ===================== Report Modal ===================== */
+function ReportModal({ open, onClose, onGenerate, rowCount }) {
+  if (!open) return null;
+  return (
+    <Modal open={open} onClose={onClose} title="Generate Commitments Report">
+      <div className="space-y-3">
+        <p className="text-sm text-slate-600">This will use your current filters and export the visible commitments into a PDF.</p>
+        {rowCount > 1500 && (
+          <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-sm">
+            Heads-up: {rowCount.toLocaleString()} rows may make the browser slow. Consider narrowing filters.
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>Cancel</button>
+          <button className="px-4 py-2 rounded-xl bg-slate-900 text-white" onClick={onGenerate}>Generate</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ===================== jsPDF helpers ===================== */
+const PUBLIC_LOGO_URL = "/reportLogo.png"; // file should live in /public
+
+async function loadImageDataURL(url) {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("logo fetch failed");
+    const blob = await res.blob();
+    const dataUrl = await new Promise((resolve) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.readAsDataURL(blob);
+    });
+    return dataUrl;
+  } catch (e) {
+    console.warn("Logo load failed, proceeding without logo:", e);
+    return null;
+  }
+}
+
+function rollup(rows) {
+  const count = rows.length;
+  const sumCents = rows.reduce((a, r) => a + (r.amountCents || 0), 0);
+  const avgCents = count ? Math.round(sumCents / count) : 0;
+  return { count, sumCents, avgCents };
+}
+function makeReportFilename(prefix, filters, ts = new Date()) {
+  const parts = [prefix || "Report"];
+  if (filters?.accountName) parts.push(filters.accountName.replace(/\s+/g, ''));
+  if (filters?.from) parts.push(String(filters.from).slice(0, 10));
+  if (filters?.to) parts.push(String(filters.to).slice(0, 10));
+  parts.push(ts.toISOString().replace(/[:T]/g, '-').slice(0, 15));
+  return parts.filter(Boolean).join('_') + ".pdf";
+}
+
+async function generateCommitmentsPDF({ rows, filters, title = "Bank Commitment Report", logoUrl = PUBLIC_LOGO_URL }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const margin = 40;
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+
+  // Header: logo + brand
+  const logoData = await loadImageDataURL(logoUrl);
+  let y = margin;
+
+  if (logoData) {
+    try {
+      doc.addImage(logoData, "PNG", margin, y - 6, 46, 46);
+    } catch (e) {
+      console.warn("Logo draw failed:", e);
+    }
+  }
+  // Brand name bigger
+  doc.setFont("helvetica", "bold").setFontSize(22).text("My Budget Pal", margin + 56, y + 20);
+  // Title with extra spacing below brand
+  const titleY = y + 56;
+  doc.setFont("helvetica", "normal").setFontSize(20).text(title, margin, titleY);
+
+  // Filters: one per line (Account, Range, Status, Search)
+  const filterLines = [
+    `Account: ${filters?.accountName || "All Accounts"}`,
+    `Range: ${filters?.from || "…"} – ${filters?.to || "…"}`,
+    ...(filters?.status ? [`Status: ${filters.status}`] : []),
+    ...(filters?.q ? [`Search: "${filters.q}"`] : []),
+  ];
+  let fy = titleY + 18;
+  doc.setFontSize(11).setTextColor(100);
+  filterLines.forEach((line) => { doc.text(line, margin, fy); fy += 14; });
+  doc.setTextColor(0);
+
+  // Left vertical caption
+  doc.setFontSize(10).setTextColor(120);
+  doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+  doc.setTextColor(0);
+
+  // Table
+  const head = [["Name", "Account Name", "Category", "Status", "Date", "Recurring", "Amount (LKR)"]];
+  const body = rows.map(r => [
+    r.name || "",
+    r.accountName || "",
+    r.category || "",
+    r.status || "",
+    formatDate(r.paidAt || r.dueDate || r.date),
+    r.isRecurring ? (r.recurrence?.frequency || "Yes") : "No",
+    (r.amountCents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })
+  ]);
+
+  autoTable(doc, {
+    startY: fy + 6,
+    head,
+    body,
+    theme: "grid",
+    styles: { fontSize: 9, cellPadding: 3 },
+    headStyles: { fillColor: [242, 246, 252], textColor: 40 },
+    didDrawPage: () => {
+      const str = `Page ${doc.internal.getNumberOfPages()}`;
+      doc.setFontSize(9);
+      doc.text(str, pageW - margin, pageH - 16, { align: "right" });
+    }
+  });
+
+  // KPIs: three separate lines (Count, Total, Average)
+  const totals = rollup(rows);
+  const afterTableY = (doc.lastAutoTable && doc.lastAutoTable.finalY) ? doc.lastAutoTable.finalY : (fy + 6);
+  let ky = afterTableY + 18;
+  doc.setFontSize(11);
+  doc.text(`Items: ${totals.count}`, margin, ky); ky += 14;
+  doc.text(`Total: LKR ${(totals.sumCents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, margin, ky); ky += 14;
+  doc.text(`Average: LKR ${(totals.avgCents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, margin, ky);
+
+  const sigY = pageH - 60; // 60pt from bottom of page
+  doc.setFontSize(12).setFont("helvetica", "normal");
+  doc.text("Signature : ...........................................", margin, sigY);
+
+  const fn = makeReportFilename("CommitmentsReport", filters);
+  doc.save(fn);
+}
+
+/* ===================== Form (Add/Edit) ===================== */
 function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }) {
   const now = new Date();
   const [f, setF] = useState({
@@ -132,22 +272,17 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     }
   }, [open, initial, accounts]);
 
-  // ---------- Insufficient funds logic (front-end guard) ----------
-  const selectedAcc = getAccount(accounts, f.accountId);
-  const currentBalanceCents = Number(selectedAcc?.balanceCents || 0);
+  const getAccount = (id) => accounts.find(a => a._id === id);
+  const currentBalanceCents = Number(getAccount(f.accountId)?.balanceCents || 0);
   const wantToPay = f.status === "paid";
   const amountCents = cents(f.amount);
   const wouldGoNegative = wantToPay && amountCents > currentBalanceCents;
 
-  // ---------- Budget hardCap logic (front-end guard) ----------
   const plan = periodPlan; // may be null
-  const commitCap = Number(plan?.commitments?.amount || 0);              // rupees in API
+  const commitCap = Number(plan?.commitments?.amount || 0); // rupees
   const commitCapCents = toCents(commitCap);
-
-  // actual used this month (paidAt in period), and projected = used + pending in period
   const usedCents = Number(plan?._usedCommitmentsCents || 0);
   const pendingCents = Number(plan?._pendingCommitmentsCents || 0);
-  const projectedCents = usedCents + pendingCents;
 
   const wouldBreachHardCap =
     !!plan?.commitments?.hardCap &&
@@ -155,13 +290,11 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     isInPeriod(f.paidAt || f.dueDate, plan?.period) &&
     usedCents + amountCents > commitCapCents;
 
-  const wouldExceedSoft = !plan?.commitments?.hardCap &&
-    wantToPay &&
-    isInPeriod(f.paidAt || f.dueDate, plan?.period) &&
-    usedCents + amountCents > commitCapCents;
-
-  const buildPayload = () => {
-    const base = {
+  const submit = async (e) => {
+    e.preventDefault();
+    if (wouldGoNegative) { alert("You can’t pay this — insufficient funds in the selected account."); return; }
+    if (wouldBreachHardCap) { alert("This payment would exceed your Commitments budget (hard cap) for this month."); return; }
+    await onSave(f._id, {
       accountId: f.accountId,
       name: f.name,
       category: f.category,
@@ -171,41 +304,21 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
       status: f.status,
       paidAt: f.status === "paid" && f.paidAt ? new Date(f.paidAt) : undefined,
       isRecurring: f.isRecurring,
-    };
-    if (f.isRecurring) {
-      const rec = {
+      recurrence: f.isRecurring ? {
         frequency: f.recurrence.frequency,
         interval: Number(f.recurrence.interval || 1),
         startDate: new Date(f.recurrence.startDate || f.dueDate),
         byWeekday: f.recurrence.byWeekday,
         byMonthDay: f.recurrence.byMonthDay,
-      };
-      if (f.endChoice === "count") rec.remaining = Number(f.remaining || 0);
-      if (f.endChoice === "date")  rec.endDate = new Date(f.endDate);
-      base.recurrence = rec;
-    }
-    return base;
-  };
-
-  const submit = async (e) => {
-    e.preventDefault();
-
-    if (wouldGoNegative) {
-      alert("You can’t pay this — insufficient funds in the selected account.");
-      return;
-    }
-    if (wouldBreachHardCap) {
-      alert("This payment would exceed your Commitments budget (hard cap) for this month.");
-      return;
-    }
-
-    await onSave(f._id, buildPayload());
+        ...(f.endChoice === "count" ? { remaining: Number(f.remaining || 0) } : {}),
+        ...(f.endChoice === "date" ? { endDate: new Date(f.endDate) } : {}),
+      } : undefined,
+    });
   };
 
   return (
     <Modal open={open} onClose={onClose} title={f._id ? "Edit Commitment" : "Add Commitment"}>
       <form onSubmit={submit} className="grid gap-4">
-        {/* account + category */}
         <div className="grid md:grid-cols-2 gap-4">
           <Field label="Account" required>
             <select
@@ -233,7 +346,6 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
           </Field>
         </div>
 
-        {/* name/amount */}
         <div className="grid md:grid-cols-2 gap-4">
           <Field label="Name" required>
             <input className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -249,7 +361,6 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
           </Field>
         </div>
 
-        {/* status / dates / currency */}
         <div className="grid md:grid-cols-3 gap-4">
           <Field label="Status" required>
             <select className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -285,30 +396,6 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
           </Field>
         </div>
 
-        {/* BUDGET WARNINGS */}
-        {plan && wantToPay && isInPeriod(f.paidAt || f.dueDate, plan.period) && (
-          <>
-            {wouldBreachHardCap && (
-              <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2">
-                This payment would exceed your Commitments budget <b>(hard cap)</b> for {plan.period}.
-              </div>
-            )}
-            {!wouldBreachHardCap && wouldExceedSoft && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-                Heads up: This would push your Commitments over the monthly plan for {plan.period}.
-              </div>
-            )}
-          </>
-        )}
-
-        {/* INSUFFICIENT WARNING */}
-        {wouldGoNegative && (
-          <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2">
-            You can’t pay this — insufficient funds in <b>{selectedAcc?.name || "account"}</b>.
-          </div>
-        )}
-
-        {/* Recurring toggle */}
         <div className="flex items-center gap-3">
           <input id="rec" type="checkbox" checked={f.isRecurring} onChange={(e) => setF({ ...f, isRecurring: e.target.checked })} />
           <label htmlFor="rec" className="text-sm text-slate-700">Make this recurring</label>
@@ -348,7 +435,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                     onChange={(e) => setF({
                       ...f, recurrence: {
                         ...f.recurrence,
-                        byWeekday: e.target.value.split(",").map(s=>Number(s.trim())).filter(Number.isInteger)
+                        byWeekday: e.target.value.split(",").map(s => Number(s.trim())).filter(Number.isInteger)
                       }
                     })}
                   />
@@ -359,7 +446,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                     onChange={(e) => setF({
                       ...f, recurrence: {
                         ...f.recurrence,
-                        byMonthDay: e.target.value.split(",").map(s=>Number(s.trim())).filter(Number.isInteger)
+                        byMonthDay: e.target.value.split(",").map(s => Number(s.trim())).filter(Number.isInteger)
                       }
                     })}
                   />
@@ -367,7 +454,6 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
               </Field>
             </div>
 
-            {/* Ends */}
             <div className="grid md:grid-cols-2 gap-4">
               <Field label="Ends">
                 <div className="space-y-2">
@@ -415,7 +501,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
   );
 }
 
-/* ---------- Page ---------- */
+/* ===================== Page ===================== */
 export default function BankCommitmentsPage() {
   const [accounts, setAccounts] = useState([]);
   const [items, setItems] = useState([]);
@@ -423,8 +509,8 @@ export default function BankCommitmentsPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [err, setErr] = useState("");
+  const [reportOpen, setReportOpen] = useState(false);
 
-  // budget plan for this month
   const period = thisPeriod();
   const [plan, setPlan] = useState(null);
 
@@ -441,7 +527,6 @@ export default function BankCommitmentsPage() {
   };
   useEffect(() => { load(); }, []);
 
-  // Compute usage against the plan (this period only)
   const usedCommitmentsCents = useMemo(() => {
     return items
       .filter((t) => t.status === "paid" && isInPeriod(t.paidAt || t.dueDate, period))
@@ -454,7 +539,6 @@ export default function BankCommitmentsPage() {
       .reduce((sum, t) => sum + (t.amountCents || 0), 0);
   }, [items, period]);
 
-  // project onto plan for the modal to use
   const planWithUsage = useMemo(() => {
     if (!plan) return null;
     return {
@@ -488,7 +572,7 @@ export default function BankCommitmentsPage() {
       const dt = new Date(t.status === "paid" ? (t.paidAt || t.dueDate) : t.dueDate);
       const okFrom = !filters.from || dt >= new Date(filters.from);
       const okTo = !filters.to || dt <= new Date(filters.to);
-      const q = filters.q.toLowerCase();
+      const q = (filters.q || "").toLowerCase();
       const okQ = !q || [t.name, t.category].some((v) => (v || "").toLowerCase().includes(q));
       return okAcc && okStatus && okFrom && okTo && okQ;
     });
@@ -498,7 +582,6 @@ export default function BankCommitmentsPage() {
   const paid = useMemo(() => filtered.filter((t) => t.status === "paid"), [filtered]);
   const accName = (id) => accounts.find((a) => a._id === id)?.name || "Account";
 
-  // budget header numbers
   const capR = Number(plan?.commitments?.amount || 0);
   const capC = toCents(capR);
   const usedR = usedCommitmentsCents / 100;
@@ -506,20 +589,27 @@ export default function BankCommitmentsPage() {
   const remainingC = Math.max(0, capC - usedCommitmentsCents);
   const projectedOver = Math.max(0, (usedCommitmentsCents + pendingCommitmentsCents) - capC);
 
+  const currentFilters = { ...filters, accountName: filters.accountId ? accName(filters.accountId) : "All Accounts" };
+
   return (
     <div className="min-h-screen bg-slate-50 py-8">
       <div className="mx-auto max-w-6xl px-4">
         <header className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Bank Commitments</h1>
-            <p className="text-slate-500 text-sm">Expenses tied to accounts. Recurring with optional end.</p>
+            <p className="text-slate-500 text-sm">Client-side reporting via jsPDF.</p>
           </div>
-          <button className="px-4 py-2 rounded-xl bg-indigo-600 text-white" onClick={() => { setEditing(null); setOpen(true); }}>
-            + Add Commitment
-          </button>
+          <div className="flex gap-2">
+            <button className="px-4 py-2 rounded-xl border border-slate-300" onClick={() => setReportOpen(true)}>
+              Generate report
+            </button>
+            <button className="px-4 py-2 rounded-xl bg-indigo-600 text-white" onClick={() => { setEditing(null); setOpen(true); }}>
+              + Add Commitment
+            </button>
+          </div>
         </header>
 
-        {/* ---------- Budget Overview (current month) ---------- */}
+        {/* Budget overview (kept) */}
         <section className="mb-6">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between mb-2">
@@ -586,7 +676,7 @@ export default function BankCommitmentsPage() {
           <Field label="Search"><input className="w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="name / category" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} /></Field>
         </div>
 
-        {/* Upcoming */}
+        {/* Lists & table (kept) */}
         <section className="mb-6">
           <h2 className="text-lg font-semibold mb-2">Upcoming</h2>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -612,7 +702,6 @@ export default function BankCommitmentsPage() {
           </div>
         </section>
 
-        {/* Completed */}
         <section className="mb-6">
           <h2 className="text-lg font-semibold mb-2">Completed</h2>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -628,8 +717,8 @@ export default function BankCommitmentsPage() {
                   <span>{LKR.format((t.amountCents || 0) / 100)}</span>
                   <span>•</span>
                   <span>
-                    Paid {new Date(t.paidAt || t.dueDate).toLocaleDateString()}
-                    {t.dueDate ? <> • Due {new Date(t.dueDate).toLocaleDateString()}</> : null}
+                    Paid {formatDate(t.paidAt || t.dueDate)}
+                    {t.dueDate ? <> • Due {formatDate(t.dueDate)}</> : null}
                   </span>
                 </div>
                 <div className="mt-3 flex justify-end gap-2 text-sm">
@@ -641,7 +730,6 @@ export default function BankCommitmentsPage() {
           </div>
         </section>
 
-        {/* Table */}
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           {err && <div className="p-3 bg-red-50 text-red-700 text-sm">{err}</div>}
           <table className="w-full text-sm">
@@ -662,7 +750,7 @@ export default function BankCommitmentsPage() {
               ) : (
                 filtered.map((t) => (
                   <tr key={t._id} className="border-t">
-                    <td className="px-3 py-2">{new Date(t.status === "paid" ? (t.paidAt || t.dueDate) : t.dueDate).toLocaleDateString()}</td>
+                    <td className="px-3 py-2">{formatDate(t.status === "paid" ? (t.paidAt || t.dueDate) : t.dueDate)}</td>
                     <td className="px-3 py-2">{t.name}</td>
                     <td className="px-3 py-2">{t.category}</td>
                     <td className="px-3 py-2">{accName(t.accountId)}</td>
@@ -686,6 +774,19 @@ export default function BankCommitmentsPage() {
           accounts={accounts}
           initial={editing}
           periodPlan={planWithUsage}
+        />
+
+        <ReportModal
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          rowCount={filtered.length}
+          onGenerate={async () => {
+            await generateCommitmentsPDF({
+              rows: filtered.map(r => ({ ...r, accountName: accName(r.accountId) })),
+              filters: currentFilters,
+            });
+            setReportOpen(false);
+          }}
         />
       </div>
     </div>

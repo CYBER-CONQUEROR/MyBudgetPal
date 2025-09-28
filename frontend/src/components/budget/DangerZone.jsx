@@ -3,28 +3,31 @@ import { TrashIcon } from "@heroicons/react/24/outline";
 
 export default function DangerZone({ onDelete }) {
   return (
-    <div className="card border border-rose-200 bg-rose-50">
-      <div className="card-body flex flex-col items-start gap-4">
-        {/* badge on top */}
-        <span className="mt-5 px-3 py-1 rounded-full border border-rose-400 text-rose-600 font-semibold text-sm">
+    <div className="border border-rose-300 bg-rose-50 rounded-lg p-4 shadow-sm">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-2">
+        <span className="px-4 py-1.5 rounded-full bg-rose-200 text-rose-800 font-bold text-base">
           Danger Zone
         </span>
+      </div>
 
-        {/* warning text */}
-        <p className="text-sm text-rose-700">
-          Once you delete your budget plan, there is no going back. Please be certain.
-        </p>
+      {/* Warning text */}
+      <p className="text-base text-black leading-relaxed flex items-start gap-2">
+        ⚠️ <span>
+          Once you delete your budget plan, <span className="font-semibold">there is no going back</span>.  
+          Please be absolutely certain before proceeding.
+        </span>
+      </p>
 
-        {/* delete button */}
-        <div className="w-full flex justify-end">
-          <button
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600 text-white font-medium hover:bg-rose-500 shadow-sm"
-            onClick={onDelete}
-          >
-            <TrashIcon className="h-5 w-5" />
-            Delete Budget Plan
-          </button>
-        </div>
+      {/* Delete button */}
+      <div className="mt-3 flex justify-end">
+        <button
+          className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-rose-600 text-white font-medium hover:bg-rose-500 focus:ring-2 focus:ring-rose-400 shadow-sm transition"
+          onClick={onDelete}
+        >
+          <TrashIcon className="h-5 w-5" />
+          Delete Budget Plan
+        </button>
       </div>
     </div>
   );

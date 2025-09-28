@@ -305,16 +305,29 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     const dt = (d instanceof Date) ? d : new Date(d);
     return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
   };
+  // Parse "YYYY-MM-DD" as LOCAL time
+  const parseYmd = (s) => {
+    if (!s) return null;
+    const [Y, M, D] = String(s).split("-").map(Number);
+    if (!Y || !M || !D) return null;
+    return new Date(Y, M - 1, D);
+  };
 
+  // month boundaries (local)
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
   const last  = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const nextLast = new Date(now.getFullYear(), now.getMonth() + 2, 0); // end of next month
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
   const minThisMonth = ymd(first);
   const maxThisMonth = ymd(last);
+  const maxNextMonth = ymd(nextLast);
+  const todayYmd     = ymd(today);
 
-  // Format numeric string with comma grouping; optionally keep a trailing dot while typing.
+  // Amount formatting
   const formatCommas = (s, keepTrailingDot = false) => {
     if (!s) return "";
-    s = s.replace(/[^0-9.]/g, ""); // keep digits and dot
+    s = s.replace(/[^0-9.]/g, "");
     const parts = s.split(".");
     const intP = (parts[0] ?? "0");
     const decP = (parts[1] ?? "");
@@ -323,25 +336,8 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     if (keepTrailingDot) return `${withCommas}.`;
     return decP !== "" ? `${withCommas}.${decP}` : withCommas;
   };
-
   const cleanAmount = (s) => (s || "").replace(/,/g, "");
-
-  // Valid positive money with up to 2 decimals
   const moneyRegex = /^\d{0,15}(\.\d{0,2})?$/;
-
-  const clampToThisMonth = (value, fieldKey, label) => {
-    const v = new Date(value);
-    if (isNaN(v)) return value;
-    if (v < first) {
-      showBubble(fieldKey, `${label} must be within this month.`);
-      return ymd(first);
-    }
-    if (v > last) {
-      showBubble(fieldKey, `${label} must be within this month.`);
-      return ymd(last);
-    }
-    return ymd(v);
-  };
 
   const moneyToCents = (s) => {
     const raw = cleanAmount(s);
@@ -454,7 +450,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     }
   };
 
-  // AMOUNT — allow decimals after digits, keep trailing dot while typing, limit to 2 decimal digits.
+  // Amount
   const onAmountKeyDown = (e) => {
     if (["-", "e", "E", "+"].includes(e.key)) {
       e.preventDefault();
@@ -471,25 +467,12 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
   };
   const onAmountChange = (e) => {
     const raw = cleanAmount(e.target.value);
-
-    // empty → allow
     if (raw === "") { setF({ ...f, amount: "" }); return; }
-
-    // allow only digits and at most one dot
     if (!/^\d*\.?\d*$/.test(raw)) { showBubble("amount", "Only digits and one dot."); return; }
-
-    // cannot start with a dot
     if (raw.startsWith(".")) { showBubble("amount", "Start with a number (e.g., 0.50)."); return; }
-
-    // if decimals present, max 2
     const [intPart, decPart = ""] = raw.split(".");
     if (decPart.length > 2) { showBubble("amount", "Up to 2 decimal places only."); return; }
-
-    // positivity already guaranteed by regex + no '-'
-
-    // keep a trailing dot while typing "123."
     const keepDot = raw.endsWith(".") && raw.includes(".") && decPart.length === 0;
-
     setF({ ...f, amount: formatCommas(raw, keepDot) });
   };
   const onAmountBlur = () => {
@@ -502,17 +485,69 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     setF((prev) => ({ ...prev, amount: formatCommas(fixed) }));
   };
 
-  const onDueChange = (e) => {
-    const clamped = clampToThisMonth(e.target.value, "dueDate", "Due date");
-    setF({ ...f, dueDate: clamped });
-  };
+  // === Dates ===
+
+  // Paid at: within this month AND not in future (<= today)
   const onPaidAtChange = (e) => {
-    const clamped = clampToThisMonth(e.target.value, "paidAt", "Paid at");
-    setF({ ...f, paidAt: clamped });
+    const d = parseYmd(e.target.value);
+    if (!d) return;
+    if (d < first) {
+      showBubble("paidAt", "Paid date must be within this month.");
+      setF({ ...f, paidAt: ymd(first) });
+      return;
+    }
+    if (d > today) {
+      showBubble("paidAt", "Paid date can't be in the future.");
+      setF({ ...f, paidAt: todayYmd });
+      return;
+    }
+    setF({ ...f, paidAt: ymd(d) });
   };
+
+  // Due date (pending): >= today AND <= end of next month
+  const onDueChange = (e) => {
+    const d = parseYmd(e.target.value);
+    if (!d) return;
+    if (d < today) {
+      showBubble("dueDate", "Due date can't be in the past.");
+      setF({ ...f, dueDate: todayYmd });
+      return;
+    }
+    if (d > nextLast) {
+      showBubble("dueDate", "Due date must be within this or next month.");
+      setF({ ...f, dueDate: maxNextMonth });
+      return;
+    }
+    setF({ ...f, dueDate: ymd(d) });
+  };
+
+  // Start date: must be within this month
   const onStartDateChange = (e) => {
-    const clamped = clampToThisMonth(e.target.value, "startDate", "Start date");
-    setRecurrence({ startDate: clamped });
+    const d = parseYmd(e.target.value);
+    if (!d) return;
+    if (d < first) {
+      showBubble("startDate", "Start date must be within this month.");
+      setRecurrence({ startDate: minThisMonth });
+      return;
+    }
+    if (d > last) {
+      showBubble("startDate", "Start date must be within this month.");
+      setRecurrence({ startDate: maxThisMonth });
+      return;
+    }
+    setRecurrence({ startDate: ymd(d) });
+  };
+
+  // End date ("Ends → On"): must be today or future; can be in other months
+  const onEndDateChange = (e) => {
+    const d = parseYmd(e.target.value);
+    if (!d) return;
+    if (d < today) {
+      showBubble("endDate", "End date must be today or a future date.");
+      setF({ ...f, endDate: todayYmd });
+      return;
+    }
+    setF({ ...f, endDate: ymd(d) });
   };
 
   const blockNonPositiveIntKeys = (e, keyName) => {
@@ -547,16 +582,24 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
       return;
     }
 
-    const mainDateStr = f.status === "paid" ? f.paidAt : f.dueDate;
-    const mainDate = new Date(mainDateStr);
-    if (isNaN(mainDate) || mainDate < first || mainDate > last) {
-      showBubble(f.status === "paid" ? "paidAt" : "dueDate", "Date must be within this month.");
-      return;
+    // Re-validate selected dates with new rules
+    if (f.status === "paid") {
+      const d = parseYmd(f.paidAt || todayYmd);
+      if (!d || d < first || d > today) {
+        showBubble("paidAt", "Paid date must be this month and not in the future.");
+        return;
+      }
+    } else {
+      const d = parseYmd(f.dueDate || todayYmd);
+      if (!d || d < today || d > nextLast) {
+        showBubble("dueDate", "Due date must be within this or next month and not in the past.");
+        return;
+      }
     }
 
     if (f.isRecurring) {
-      const sd = new Date(f.recurrence.startDate);
-      if (isNaN(sd) || sd < first || sd > last) {
+      const sd = parseYmd(f.recurrence.startDate);
+      if (!sd || sd < first || sd > last) {
         showBubble("startDate", "Start date must be within this month.");
         return;
       }
@@ -571,9 +614,9 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
         }
       }
       if (f.endChoice === "date" && f.endDate) {
-        const ed = new Date(f.endDate);
-        if (isNaN(ed)) {
-          showBubble("endDate", "Enter a valid end date.");
+        const ed = parseYmd(f.endDate);
+        if (!ed || ed < today) {
+          showBubble("endDate", "End date must be today or a future date.");
           return;
         }
       }
@@ -594,18 +637,18 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
       category: f.category,
       amountCents: moneyToCents(f.amount),
       currency: f.currency,
-      dueDate: new Date(f.dueDate),
+      dueDate: parseYmd(f.dueDate) || new Date(f.dueDate),
       status: f.status,
-      paidAt: f.status === "paid" && f.paidAt ? new Date(f.paidAt) : undefined,
+      paidAt: f.status === "paid" && f.paidAt ? (parseYmd(f.paidAt) || new Date(f.paidAt)) : undefined,
       isRecurring: f.isRecurring,
       recurrence: f.isRecurring ? {
         frequency: f.recurrence.frequency,
         interval: Number(f.recurrence.interval || 1),
-        startDate: new Date(f.recurrence.startDate || f.dueDate),
+        startDate: parseYmd(f.recurrence.startDate) || new Date(f.recurrence.startDate || f.dueDate),
         byWeekday: f.recurrence.byWeekday,
         byMonthDay: f.recurrence.byMonthDay,
         ...(f.endChoice === "count" ? { remaining: Number(f.remaining || 0) } : {}),
-        ...(f.endChoice === "date" ? { endDate: f.endDate ? new Date(f.endDate) : undefined } : {}),
+        ...(f.endChoice === "date" ? { endDate: f.endDate ? (parseYmd(f.endDate) || new Date(f.endDate)) : undefined } : {}),
       } : undefined,
     });
   };
@@ -700,9 +743,9 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                 <input
                   type="date"
                   className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                  value={f.paidAt || ymd(now)}
+                  value={f.paidAt || todayYmd}
                   min={minThisMonth}
-                  max={maxThisMonth}
+                  max={todayYmd}
                   onChange={onPaidAtChange}
                 />
                 <Bubble show={bubble.key === "paidAt"} message={bubble.msg} />
@@ -715,8 +758,8 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                   type="date"
                   className="w-full rounded-xl border border-slate-300 px-3 py-2"
                   value={f.dueDate}
-                  min={minThisMonth}
-                  max={maxThisMonth}
+                  min={todayYmd}
+                  max={maxNextMonth}
                   onChange={onDueChange}
                 />
                 <Bubble show={bubble.key === "dueDate"} message={bubble.msg} />
@@ -862,9 +905,8 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                         type="date"
                         className="rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100"
                         value={f.endDate}
-                        min={minThisMonth}
-                        max={maxThisMonth}
-                        onChange={(e) => setF({ ...f, endDate: e.target.value })}
+                        min={todayYmd}
+                        onChange={onEndDateChange}
                       />
                       <Bubble show={bubble.key === "endDate"} message={bubble.msg} />
                     </div>
@@ -889,6 +931,8 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     </Modal>
   );
 }
+
+
 
 /* ===================== Page ===================== */
 export default function BankCommitmentsPage() {

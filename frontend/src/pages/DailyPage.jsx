@@ -1,8 +1,10 @@
 // src/pages/DailyPage.jsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X } from "lucide-react";
+import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X, FileText } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import api from "../api/api.js"; // axios instance with baseURL=/api and withCredentials:true
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 /* =========================
    Local date helpers
@@ -20,76 +22,44 @@ const inRange = (d, start, end) => {
   return ts >= s && ts <= e;
 };
 
+const PUBLIC_LOGO_URL = "/reportLogo.png"; // file should live in /public
+
+async function loadImageDataURL(url) {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("logo fetch failed");
+    const blob = await res.blob();
+    const dataUrl = await new Promise((resolve) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.readAsDataURL(blob);
+    });
+    return dataUrl;
+  } catch (e) {
+    console.warn("Logo load failed, proceeding without logo:", e);
+    return null;
+  }
+}
+
 /* =========================
-   API helpers (axios client)
+   API helpers
    ========================= */
 const asList = (res) =>
   Array.isArray(res?.data?.data) ? res.data.data : Array.isArray(res?.data) ? res.data : [];
 
 const expensesAPI = {
   list: async (q = {}) => asList(await api.get("expenses", { params: q })),
-  create: async (payload) => {
-    try {
-      const res = await api.post("expenses", payload);
-      return res.data;
-    } catch (err) {
-      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
-      throw new Error(msg || "Failed to create expense");
-    }
-  },
-  update: async (id, payload) => {
-    try {
-      const res = await api.put(`expenses/${id}`, payload);
-      return res.data;
-    } catch (err) {
-      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
-      throw new Error(msg || "Failed to update expense");
-    }
-  },
-  remove: async (id) => {
-    try {
-      const res = await api.delete(`expenses/${id}`);
-      return res.data;
-    } catch (err) {
-      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
-      throw new Error(msg || "Failed to delete expense");
-    }
-  },
+  create: async (payload) => (await api.post("expenses", payload)).data,
+  update: async (id, payload) => (await api.put(`expenses/${id}`, payload)).data,
+  remove: async (id) => (await api.delete(`expenses/${id}`)).data,
 };
 
 const categoriesAPI = {
   list: async () => asList(await api.get("categories")),
-  create: async (name) => {
-    try {
-      const res = await api.post("categories", { name });
-      return res.data;
-    } catch (err) {
-      const status = err?.response?.status;
-      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
-      if (status === 409) throw new Error("Category already exists");
-      throw new Error(msg || "Failed to create category");
-    }
-  },
-  update: async (id, body) => {
-    try {
-      const res = await api.put(`categories/${id}`, body);
-      return res.data;
-    } catch (err) {
-      const status = err?.response?.status;
-      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
-      if (status === 409) throw new Error("Category already exists");
-      throw new Error(msg || "Failed to update category");
-    }
-  },
-  remove: async (id, reassign = "Other") => {
-    try {
-      const res = await api.delete(`categories/${id}`, { params: { reassign } });
-      return res.data;
-    } catch (err) {
-      const msg = err?.response?.data?.error || err?.response?.data?.message || err.message;
-      throw new Error(msg || "Failed to delete category");
-    }
-  },
+  create: async (name) => (await api.post("categories", { name })).data,
+  update: async (id, body) => (await api.put(`categories/${id}`, body)).data,
+  remove: async (id, reassign = "Other") =>
+    (await api.delete(`categories/${id}`, { params: { reassign } })).data,
 };
 
 const budgetAPI = {
@@ -118,6 +88,173 @@ const fmtLKR = (n) =>
   `LKR ${Number(n || 0).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /* =========================
+   PDF GENERATOR (Grouped)
+   ========================= */
+function formatDate(d) {
+  return d ? new Date(d).toLocaleDateString() : "";
+}
+function makeReportFilename(prefix, ts = new Date()) {
+  return `${prefix}_${ts.toISOString().replace(/[:T]/g, "-").slice(0, 15)}.pdf`;
+}
+
+async function generateExpensesPDFGrouped({
+  rows,
+  filters,
+  cats,
+  accounts,
+  logoUrl = PUBLIC_LOGO_URL, // keep your default
+}) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+
+  // ---- layout constants (tweak freely) ----
+  const margin = 40;          // base page margin
+  const headerH = 64;         // reserved height for header area (logo + titles)
+  const logoW = 44;           // rendered logo width/height (square)
+  const logoH = 44;
+  const gap = 12;             // space between logo and text block
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+
+  // ---- header: logo + text, side-by-side ----
+  let textX = margin; // will shift right if logo is drawn
+  const titleY = margin + 18;     // first text baseline
+  const subTitleY = titleY + 24;  // second line baseline
+
+  try {
+    const logoData = await loadImageDataURL(logoUrl);
+    if (logoData) {
+      // draw the logo anchored to top-left of header block
+      doc.addImage(logoData, "PNG", margin, margin - 4, logoW, logoH);
+      textX = margin + logoW + gap; // push text right of the logo
+    }
+  } catch (e) {
+    console.warn("Logo draw failed:", e);
+    textX = margin;
+  }
+
+  // titles
+  doc.setFont("helvetica", "bold").setFontSize(22).text("My Budget Pal", textX, titleY);
+  doc.setFont("helvetica", "normal").setFontSize(18).text("Day-to-Day Expense Report", textX, subTitleY);
+
+  // everything below starts AFTER the reserved header block
+  let cursorY = margin + headerH;
+
+  // ---- filters block ----
+  const filterLines = [
+    `From: ${filters.start || "…"}   To: ${filters.end || "…"}`,
+    filters.categoryId ? `Category: ${cats.find(c => c._id === filters.categoryId)?.name || "—"}` : "Category: All",
+    filters.accountId ? `Account: ${accounts.find(a => a._id === filters.accountId)?.name || "—"}` : "Account: All",
+  ];
+  doc.setFontSize(11).setTextColor(100);
+  filterLines.forEach((line) => { doc.text(line, margin, cursorY); cursorY += 14; });
+  doc.setTextColor(0);
+
+  // left vertical caption
+  doc.setFontSize(9).setTextColor(120);
+  doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+  doc.setTextColor(0);
+
+  // ---- group by category ----
+  const grouped = {};
+  rows.forEach(r => {
+    const cat = r.categoryName || r.category?.name || "Uncategorized";
+    (grouped[cat] ||= []).push(r);
+  });
+
+  // page footer (page number)
+  const addPageNumber = () => {
+    const str = `Page ${doc.internal.getNumberOfPages()}`;
+    doc.setFontSize(9);
+    doc.text(str, pageW - margin, pageH - 16, { align: "right" });
+  };
+
+  let grandTotal = 0;
+  let grandCount = 0;
+
+  // render each category block
+  for (const [catName, catRows] of Object.entries(grouped)) {
+    // category title
+    doc.setFont("helvetica", "bold").setFontSize(12);
+    doc.text(catName, margin, cursorY + 10);
+    cursorY += 16;
+
+    // build table rows
+    const head = [["Title", "Date", "Account", "Description", "Amount (LKR)"]];
+    const body = catRows.map(r => {
+      grandTotal += r.amountCents || 0;
+      grandCount++;
+      return [
+        r.title,
+        r.date ? new Date(r.date).toLocaleDateString() : "",
+        accounts.find(a => String(a._id) === String(r.accountId))?.name || "—",
+        r.description || "",
+        (r.amountCents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 }),
+      ];
+    });
+
+    // render table
+    autoTable(doc, {
+      startY: cursorY,
+      head,
+      body,
+      theme: "grid",
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: [242, 246, 252], textColor: 40 },
+      didDrawPage: addPageNumber,
+      margin: { left: margin, right: margin },
+    });
+
+    // move cursor under the table
+    const afterTableY = doc.lastAutoTable?.finalY || cursorY;
+
+    // subtotal line
+    const catTotal = catRows.reduce((a, r) => a + (r.amountCents || 0), 0);
+    doc.setFont("helvetica", "bold").setFontSize(10);
+    doc.text(
+      `Subtotal for ${catName}: LKR ${(catTotal / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+      margin,
+      afterTableY + 14
+    );
+
+    cursorY = afterTableY + 30;
+
+    // if we're too close to the bottom, add a new page before the next category
+    if (cursorY > pageH - 100) {
+      doc.addPage();
+      addPageNumber();
+      // reset vertical caption on new page (optional)
+      doc.setFontSize(9).setTextColor(120);
+      doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+      doc.setTextColor(0);
+      cursorY = margin; // start fresh below top margin on new page
+    }
+  }
+
+  // ---- grand totals ----
+  doc.setFont("helvetica", "bold").setFontSize(12);
+  doc.text(`Total items: ${grandCount}`, margin, cursorY);
+  doc.text(
+    `Grand total: LKR ${(grandTotal / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+    margin,
+    cursorY + 18
+  );
+  doc.text(
+    `Average: LKR ${grandCount ? (grandTotal / grandCount / 100).toLocaleString(undefined, { minimumFractionDigits: 2 }) : "0.00"}`,
+    margin,
+    cursorY + 36
+  );
+
+  // ---- signature (always above footer area) ----
+  const sigY = pageH - 60;
+  doc.setFont("helvetica", "normal").setFontSize(12);
+  doc.text("Signature : ...........................................", margin, sigY);
+
+  addPageNumber();
+  const fn = makeReportFilename("ExpensesReport");
+  doc.save(fn);
+}
+
+/* =========================
    Page
    ========================= */
 export default function DailyPage() {
@@ -126,6 +263,7 @@ export default function DailyPage() {
   const fixedStart = ymd(startOfMonth(today));
   const fixedEnd = ymd(endOfMonth(today));
   const period = ym(today);
+ 
 
   // Filters for the LIST only
   const [filters, setFilters] = useState({
@@ -289,9 +427,14 @@ export default function DailyPage() {
             >
               <Plus size={16} /> Add Expense
             </button>
+            <button
+              onClick={() => generateExpensesPDFGrouped({ rows: visibleExpenses, filters, cats, accounts })}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50 shadow-sm"
+            >
+              <FileText size={16} /> Generate Report
+            </button>
           </div>
         </div>
-
         {/* Summary + usage */}
         <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Left: donut + stats */}
@@ -524,6 +667,7 @@ export default function DailyPage() {
         </div>
       </div>
 
+      {/* Modals */}
       {showForm && (
         <ExpenseFormModal
           categories={cats}

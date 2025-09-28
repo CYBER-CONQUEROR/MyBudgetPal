@@ -9,6 +9,8 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import api from "../api/api.js";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 /* ------------------------- API facades ------------------------- */
 const Goals = {
@@ -56,8 +58,107 @@ function sumMonthlySavingsActivity(goals, start, end) {
   return { net: inCents - outCents, inCents, outCents };
 }
 
+/* ------------------------- PDF REPORT ------------------------- */
+function makeReportFilename(prefix, ts = new Date()) {
+  return `${prefix}_${ts.toISOString().replace(/[:T]/g, "-").slice(0, 15)}.pdf`;
+}
+
+function generateSavingsPDF({ goals, filters, logoUrl = "/reportLogo.png" }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const margin = 40;
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+
+  // Header
+  let textX = margin;
+  try {
+    const img = new Image();
+    img.crossOrigin = "Anonymous";
+    img.src = logoUrl;
+    doc.addImage(img, "PNG", margin, margin - 4, 44, 44);
+    textX = margin + 56;
+  } catch {}
+  doc.setFont("helvetica", "bold").setFontSize(20).text("My Budget Pal", textX, margin + 12);
+  doc.setFont("helvetica", "normal").setFontSize(16).text("Savings Goals Report", textX, margin + 34);
+
+  let y = margin + 70;
+
+  // Filters summary
+  doc.setFontSize(11);
+  doc.text(`Filter: Status=${filters.status}`, margin, y);
+  y += 16;
+  doc.text(`Priority=${filters.priority}`, margin, y);
+  y += 16;
+  doc.text(`Search="${filters.q}"`, margin, y);
+  y += 24;
+
+  // Overview
+  const totalTarget = goals.reduce((sum, g) => sum + (g.targetCents || 0), 0);
+  const totalSaved = goals.reduce((sum, g) => sum + (g.savedCents || 0), 0);
+  const completed = goals.filter((g) => g.completed).length;
+  const active = goals.length - completed;
+  doc.setFont("helvetica", "bold").setFontSize(13).text("Overview", margin, y);
+  y += 14;
+  doc.setFont("helvetica", "normal").setFontSize(11);
+  doc.text(`Total Goals: ${goals.length}`, margin, y); y += 14;
+  doc.text(`Active Goals: ${active}`, margin, y); y += 14;
+  doc.text(`Completed Goals: ${completed}`, margin, y); y += 24;
+
+  // Each goal
+  for (const g of goals) {
+    doc.setFont("helvetica", "bold").setFontSize(12).text(`Goal: ${g.name}`, margin, y);
+    y += 14;
+    doc.setFont("helvetica", "normal").setFontSize(10);
+    doc.text(`Target: ${LKR.format((g.targetCents||0)/100)}`, margin, y); y += 12;
+    doc.text(`Saved: ${LKR.format((g.savedCents||0)/100)}`, margin, y); y += 12;
+    doc.text(`Remaining: ${LKR.format(((g.targetCents||0)-(g.savedCents||0))/100)}`, margin, y); y += 12;
+    doc.text(`Priority: ${g.priority}`, margin, y); y += 12;
+    if (g.deadline) {
+      doc.text(`Deadline: ${new Date(g.deadline).toLocaleDateString()}`, margin, y);
+      y += 12;
+    }
+    doc.text(`Status: ${g.completed ? "Completed" : "Active"}`, margin, y);
+    y += 18;
+
+    // Ledger
+    const head = [["Date", "Type", "Amount", "Note"]];
+    const body = (g.ledger || []).map((e) => [
+      new Date(e.at).toLocaleDateString(),
+      e.kind,
+      LKR.format((e.amountCents||0)/100),
+      e.note || "",
+    ]);
+    if (body.length) {
+      autoTable(doc, {
+        startY: y,
+        head, body,
+        theme: "grid",
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [242, 246, 252], textColor: 40 },
+        margin: { left: margin, right: margin },
+      });
+      y = doc.lastAutoTable.finalY + 32;
+    } else {
+      doc.text("No ledger entries.", margin, y);
+      y += 20;
+    }
+  }
+
+  // Totals
+  doc.setFont("helvetica", "bold").setFontSize(12);
+  doc.text(`Grand Total Target: ${LKR.format(totalTarget/100)}`, margin, y); y += 14;
+  doc.text(`Grand Total Saved: ${LKR.format(totalSaved/100)}`, margin, y); y += 30;
+
+  // Signature
+  doc.setFont("helvetica", "normal").setFontSize(12);
+  doc.text("Signature : ...........................................", margin, pageH - 60);
+
+  const fn = makeReportFilename("SavingsReport");
+  doc.save(fn);
+}
+
 /* ------------------------- UI atoms ------------------------- */
-function Field({ label, required, children, hint }) {
+function Field({ label, required, children, hint }) { /* unchanged */ 
   return (
     <label className="block">
       <span className="text-sm font-medium text-slate-700 flex items-center gap-1">
@@ -69,38 +170,19 @@ function Field({ label, required, children, hint }) {
   );
 }
 
-// Money input: JS-only enforcement of 2 decimals (no HTML pattern)
-function MoneyInput({ value, onChange, required, ...props }) {
-  const sanitize = (v) => {
-    let x = String(v ?? "").trim();
-    x = x.replace(/[^\d.]/g, "");
-    const parts = x.split(".");
-    if (parts.length > 2) x = parts[0] + "." + parts.slice(1).join("");
-    const [whole, dec = ""] = x.split(".");
-    const dec2 = dec.slice(0, 2);
-    return dec2.length ? `${whole}.${dec2}` : whole;
-  };
+function MoneyInput({ value, onChange, required, ...props }) { /* unchanged */ 
+  const sanitize = (v) => { let x = String(v ?? "").trim(); x = x.replace(/[^\d.]/g, ""); const parts = x.split("."); if (parts.length > 2) x = parts[0] + "." + parts.slice(1).join(""); const [whole, dec = ""] = x.split("."); const dec2 = dec.slice(0, 2); return dec2.length ? `${whole}.${dec2}` : whole; };
   return (
-    <input
-      type="text"
-      inputMode="decimal"
-      placeholder="0.00"
-      required={required}
+    <input type="text" inputMode="decimal" placeholder="0.00" required={required}
       className="w-full rounded-xl border border-slate-300 px-3 py-2"
-      value={value}
-      onChange={(e) => onChange(sanitize(e.target.value))}
-      onBlur={(e) => {
-        const v = e.target.value;
-        if (!v || v === ".") return onChange("");
-        const num = Number(v);
-        onChange(Number.isFinite(num) ? num.toFixed(2) : "");
-      }}
+      value={value} onChange={(e) => onChange(sanitize(e.target.value))}
+      onBlur={(e) => { const v = e.target.value; if (!v || v === ".") return onChange(""); const num = Number(v); onChange(Number.isFinite(num) ? num.toFixed(2) : ""); }}
       {...props}
     />
   );
 }
 
-function Modal({ open, onClose, title, children }) {
+function Modal({ open, onClose, title, children }) { /* unchanged */ 
   if (!open) return null;
   return (
     <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -115,17 +197,13 @@ function Modal({ open, onClose, title, children }) {
   );
 }
 
-function PriorityBadge({ priority = "medium" }) {
-  const map = {
-    high: "bg-rose-100 text-rose-700 border-rose-200",
-    medium: "bg-amber-100 text-amber-700 border-amber-200",
-    low: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  };
+function PriorityBadge({ priority = "medium" }) { /* unchanged */ 
+  const map = { high: "bg-rose-100 text-rose-700 border-rose-200", medium: "bg-amber-100 text-amber-700 border-amber-200", low: "bg-emerald-100 text-emerald-700 border-emerald-200", };
   const label = priority[0].toUpperCase() + priority.slice(1);
   return <span className={`px-2 py-0.5 rounded-full text-xs border ${map[priority] || map.medium}`}>{label} Priority</span>;
 }
 
-function DueBadge({ deadline, completed }) {
+function DueBadge({ deadline, completed }) { /* unchanged */ 
   if (!deadline) return null;
   const today = new Date();
   const dd = Math.ceil((new Date(deadline) - new Date(today.toISOString().slice(0,10))) / (1000*60*60*24));
@@ -136,37 +214,26 @@ function DueBadge({ deadline, completed }) {
 }
 
 /* ------------------------- Charts ------------------------- */
-function RadialProgress({ percent = 0, centerLabel = "of budget" }) {
+function RadialProgress({ percent = 0, centerLabel = "of budget" }) { /* unchanged */ 
   const data = [{ name: "Progress", value: Math.max(0, Math.min(100, Math.round(percent))) }];
   return (
     <div className="relative h-[220px] w-[220px]">
       <ResponsiveContainer width="100%" height="100%">
         <RadialBarChart innerRadius="70%" outerRadius="100%" data={data} startAngle={90} endAngle={-270}>
-          <defs>
-            <linearGradient id="gradProgress" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#6366f1" />
-              <stop offset="100%" stopColor="#10b981" />
-            </linearGradient>
-          </defs>
+          <defs><linearGradient id="gradProgress" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#6366f1" /><stop offset="100%" stopColor="#10b981" /></linearGradient></defs>
           <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
           <RadialBar dataKey="value" cornerRadius={24} fill="url(#gradProgress)" background />
           <Tooltip formatter={(v) => `${v}%`} />
         </RadialBarChart>
       </ResponsiveContainer>
       <div className="absolute inset-0 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-3xl font-semibold text-slate-900">{Math.round(percent)}%</div>
-          <div className="text-xs text-slate-500">{centerLabel}</div>
-        </div>
+        <div className="text-center"><div className="text-3xl font-semibold text-slate-900">{Math.round(percent)}%</div><div className="text-xs text-slate-500">{centerLabel}</div></div>
       </div>
     </div>
   );
 }
 const GoalRadial = ({ savedCents, targetCents }) => (
-  <RadialProgress
-    percent={clamp01((savedCents||0)/Math.max(1, targetCents||1))*100}
-    centerLabel="of target"
-  />
+  <RadialProgress percent={clamp01((savedCents||0)/Math.max(1, targetCents||1))*100} centerLabel="of target" />
 );
 
 /* ------------------------- Forms ------------------------- */
@@ -374,12 +441,12 @@ export default function SavingsGoalsPage() {
             <h1 className="text-2xl font-bold text-slate-900">Savings Goals</h1>
             <p className="text-slate-500 text-sm">Plan savings, fund from any account, and track against your monthly budget.</p>
           </div>
-          <button className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700" onClick={() => { setEditing(null); setOpenGoalForm(true); }}>
-            + Add Goal
-          </button>
+          <div className="flex gap-2">
+            <button className="px-3 py-2 rounded-xl border" onClick={() => generateSavingsPDF({ goals, filters, logoUrl: "/reportLogo.png" })}>Generate Report</button>
+            <button className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700" onClick={() => { setEditing(null); setOpenGoalForm(true); }}>+ Add Goal</button>
+          </div>
         </header>
 
-        {/* Budget Summary */}
         <section className="mb-8">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between">
@@ -531,6 +598,7 @@ export default function SavingsGoalsPage() {
         <GoalForm open={openGoalForm} onClose={() => { setOpenGoalForm(false); setEditing(null); }} onSave={onSaveGoal} initial={editing} />
         <FundForm open={fundOpen} onClose={() => { setFundOpen(false); setActiveGoal(null); }} onSubmit={doFund} accounts={accounts} goal={activeGoal} mode="fund" />
         <FundForm open={withdrawOpen} onClose={() => { setWithdrawOpen(false); setActiveGoal(null); }} onSubmit={doWithdraw} accounts={accounts} goal={activeGoal} mode="withdraw" />
+      
       </div>
     </div>
   );

@@ -1,6 +1,8 @@
 // src/pages/EventsPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/api.js";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 /* ===================== API wrappers ===================== */
 const Accounts = {
@@ -12,9 +14,9 @@ const Events = {
   create: (b) => api.post("events", b).then((r) => r.data),
   update: (id, b) => api.put(`events/${id}`, b).then((r) => r.data),
   remove: (id) => api.delete(`events/${id}`).then((r) => r.data),
-  fund:   (id, b) => api.post(`events/${id}/fund`, b).then((r) => r.data),
+  fund: (id, b) => api.post(`events/${id}/fund`, b).then((r) => r.data),
   defund: (id, b) => api.post(`events/${id}/defund`, b).then((r) => r.data),
-  spend:  (id, b) => api.post(`events/${id}/spend`, b).then((r) => r.data),
+  spend: (id, b) => api.post(`events/${id}/spend`, b).then((r) => r.data),
 };
 
 const Budget = {
@@ -84,6 +86,205 @@ function Modal({ open, onClose, title, children, max = "max-w-2xl" }) {
   );
 }
 
+/* ===================== MONEY HELPERS ===================== */
+const rupeesFrom = (cents) => (cents || 0) / 100;
+const fmtLKR = (n) => `LKR ${Number(n || 0).toLocaleString("en-LK", { minimumFractionDigits: 2 })}`;
+
+/* ===================== IMAGE HELPER ===================== */
+async function loadImageDataURL(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "Anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+function makeReportFilename(prefix, ts = new Date()) {
+  return `${prefix}_${ts.toISOString().replace(/[:T]/g, "-").slice(0, 15)}.pdf`;
+}
+
+/* ===================== NEW: PDF to match sketch ===================== */
+async function generateEventExpensesReportPDF({
+  rows,
+  filters,
+  period,
+  logoUrl = "/reportLogo.png",
+}) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const margin = 40;
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+
+  // Header
+  let textX = margin;
+  try {
+    const logoData = await loadImageDataURL(logoUrl);
+    console.log(logoUrl);
+    if (logoData) {
+      doc.addImage(logoData, "PNG", margin, margin - 4, 44, 44);
+      textX = margin + 56;
+    }
+  } catch (_) {}
+  doc.setFont("helvetica", "bold").setFontSize(20).text("My Budget Pal", textX, margin + 12);
+  doc.setFont("helvetica", "normal").setFontSize(16).text("Event Expenses Report", textX, margin + 34);
+
+  // Left vertical caption
+  doc.setFontSize(9).setTextColor(120);
+  doc.text("A system generated report by MyBudgetPal", 12, pageH / 2, { angle: 90 });
+  doc.setTextColor(0);
+
+  let y = margin + 70;
+
+  const fmtDate = (dStr) => (dStr ? new Date(dStr).toLocaleDateString() : "—");
+
+  // Filters block (from your UI state)
+  const rangeLabel =
+    filters?.from || filters?.to
+      ? `${fmtDate(filters?.from || "")}  -  ${fmtDate(filters?.to || "")}`
+      : "____________  -  ____________";
+  const modeLabel = filters?.mode ? (filters.mode === "single" ? "Single" : "Itemized") : "All";
+  const dateFieldLabel = filters?.dateField === "due" ? "Due Date" : "Created Date";
+
+  doc.setFont("helvetica", "normal").setFontSize(11);
+  doc.text(`Scoped Month (Created): ${period || "—"}`, margin, y);
+  y += 16;
+  doc.text(`Date range       : ${rangeLabel}`, margin, y);
+  y += 16;
+  doc.text(`Filter option 1  : Mode = ${modeLabel}`, margin, y);
+  y += 16;
+  doc.text(`Filter option 2  : Date field = ${dateFieldLabel}`, margin, y);
+  y += 24;
+
+  // Single Item Events
+  const singles = rows.filter((e) => e.mode === "single");
+  let singleTotalC = 0;
+
+  if (singles.length) {
+    doc.setFont("helvetica", "bold").setFontSize(13).text("Single Item Events", margin, y);
+    y += 10;
+
+    const head = [["Title", "DueDate", "StartDate", "EndDate", "Amount (LKR)"]];
+    const body = singles.map((e) => {
+      singleTotalC += e.targetCents || 0;
+      return [
+        e.title,
+        e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—",
+        e?.dates?.start ? new Date(e.dates.start).toLocaleDateString() : "—",
+        e?.dates?.end ? new Date(e.dates.end).toLocaleDateString() : "—",
+        currency(e.targetCents, e.currency || "LKR"),
+      ];
+    });
+
+    autoTable(doc, {
+      startY: y + 8,
+      head,
+      body,
+      theme: "grid",
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: [242, 246, 252], textColor: 40 },
+      margin: { left: margin, right: margin },
+    });
+
+    y = doc.lastAutoTable.finalY + 16;
+    doc.setFont("helvetica", "normal").setFontSize(11);
+    doc.text(`Single Event total = ${currency(singleTotalC)}`, margin, y);
+    y += 24;
+  }
+
+  // Itemized Events
+  const itemized = rows.filter((e) => e.mode === "itemized");
+  let itemizedGrandC = 0;
+
+  if (itemized.length) {
+    doc.setFont("helvetica", "bold").setFontSize(13).text("Itemized Events", margin, y);
+    y += 8;
+
+    itemized.forEach((e, idx) => {
+      const head = [["Title", "DueDate", "StartDate", "EndDate", "Item", "Amount (LKR)"]];
+      let subTotalC = 0;
+      const body = (e.subItems || []).map((s) => {
+        const amt = Number(s.targetCents || 0);
+        subTotalC += amt;
+        return [
+          e.title,
+          e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—",
+          e?.dates?.start ? new Date(e.dates.start).toLocaleDateString() : "—",
+          e?.dates?.end ? new Date(e.dates.end).toLocaleDateString() : "—",
+          s.name || "—",
+          currency(amt, e.currency || "LKR"),
+        ];
+      });
+
+      // If no subitems, still list the event row with a blank item
+      if (body.length === 0) {
+        subTotalC += Number(e.targetCents || 0);
+        body.push([
+          e.title,
+          e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—",
+          e?.dates?.start ? new Date(e.dates.start).toLocaleDateString() : "—",
+          e?.dates?.end ? new Date(e.dates.end).toLocaleDateString() : "—",
+          "(no items)",
+          currency(e.targetCents || 0, e.currency || "LKR"),
+        ]);
+      }
+
+      autoTable(doc, {
+        startY: y + (idx === 0 ? 6 : 2),
+        head,
+        body,
+        theme: "grid",
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [242, 246, 252], textColor: 40 },
+        margin: { left: margin, right: margin },
+      });
+
+      y = doc.lastAutoTable.finalY + 16;
+      doc.setFont("helvetica", "normal").setFontSize(11);
+      doc.text(`Total for ${e.title} = ${currency(subTotalC)}`, margin, y);
+      y += 32;
+
+      itemizedGrandC += subTotalC;
+    });
+
+    doc.setFont("helvetica", "bold").setFontSize(12);
+    doc.text(`Total For Itemized Events = ${currency(itemizedGrandC)}`, margin, y);
+    y += 16;
+  }
+
+  // GRAND TOTALS
+  const grandTotalC = singleTotalC + itemizedGrandC;
+  const numberOfEvents = rows.length;
+
+  doc.setFont("helvetica", "bold").setFontSize(12);
+  doc.text(`All Total Event Expenses = ${currency(grandTotalC)}`, margin, y);
+  y += 16;
+  doc.text(`Number Of Events = ${numberOfEvents}`, margin, y);
+  y += 40;
+
+  // Signature
+  doc.setFont("helvetica", "normal").setFontSize(12);
+  doc.text("Signature : ...........................................", margin, pageH - 60);
+
+  // Footer page number
+  const pageCount = doc.internal.getNumberOfPages();
+  doc.setFontSize(9);
+  doc.text(`Page ${pageCount}`, pageW - margin, pageH - 16, { align: "right" });
+
+  // Save
+  const fn = makeReportFilename("EventExpensesReport");
+  doc.save(fn);
+}
+
+/* ===================== PROGRESS BARS ===================== */
 function Bar({ value, max, hard = false }) {
   const pct = max > 0 ? value / max : 0;
   const w = `${clamp01(pct) * 100}%`;
@@ -263,10 +464,20 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
 
         <div className="grid md:grid-cols-2 gap-4">
           <Field label="Start date">
-            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
+            <input
+              type="date"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.startDate}
+              onChange={(e) => setF({ ...f, startDate: e.target.value })}
+            />
           </Field>
           <Field label="End date">
-            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} />
+            <input
+              type="date"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.endDate}
+              onChange={(e) => setF({ ...f, endDate: e.target.value })}
+            />
           </Field>
         </div>
 
@@ -330,7 +541,9 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
                 </button>
               </div>
             ))}
-            <div className="text-right text-sm text-slate-600">Total: {currency(toCents(itemizedTotal), f.currency)}</div>
+            <div className="text-right text-sm text-slate-600">
+              Total: {currency(toCents(itemizedTotal), f.currency)}
+            </div>
           </div>
         )}
 
@@ -345,7 +558,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
         {/* Budget warning (warn-only on create) */}
         {showBudgetWarn && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-            Heads up: This event’s target ({currency(targetCents, f.currency)}) exceeds your remaining Events budget for {budget?.period}.
+            Heads up: This event’s target ({currency(targetCents, f.currency)}) exceeds your remaining Events budget for{" "}
+            {budget?.period}.
           </div>
         )}
 
@@ -401,7 +615,7 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
   const insufficientAccount = (selectedAcc?.balanceCents || 0) < amountCents;
   const overEventTarget = amountCents > remainingTargetCents;
 
-  // Budget hard/soft cap check (Budget = used(spent) + earmarked(unspent funding))
+  // Budget hard/soft cap check
   const capC = toCents(Number(budget?.events?.amount || 0));
   const usedC = Number(budget?._usedEventsCents || 0);
   const earmarkedC = Number(budget?._earmarkedEventsCents || 0);
@@ -447,11 +661,7 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
         </Field>
 
         <div className="grid md:grid-cols-3 gap-4">
-          <Field
-            label="Amount"
-            required
-            hint={`Max: ${currency(maxAllowed, event?.currency || "LKR")}`}
-          >
+          <Field label="Amount" required hint={`Max: ${currency(maxAllowed, event?.currency || "LKR")}`}>
             <input
               type="number"
               step="0.01"
@@ -465,16 +675,27 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
             />
           </Field>
           <Field label="Date" required>
-            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={date} onChange={(e) => setDate(e.target.value)} />
+            <input
+              type="date"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
           </Field>
           <Field label="Note">
-            <input className="w-full rounded-xl border border-slate-300 px-3 py-2" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional" />
+            <input
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Optional"
+            />
           </Field>
         </div>
 
         {overEventTarget && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-            You’re trying to fund more than this event’s remaining target. Remaining: {currency(remainingTargetCents, event?.currency || "LKR")}.
+            You’re trying to fund more than this event’s remaining target. Remaining:{" "}
+            {currency(remainingTargetCents, event?.currency || "LKR")}.
           </div>
         )}
         {insufficientAccount && (
@@ -489,7 +710,8 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
         )}
         {hardCap && overBudget && (
           <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2">
-            Events budget is a <b>hard cap</b> this month. You can fund up to {currency(remainingBudgetC, event?.currency || "LKR")}.
+            Events budget is a <b>hard cap</b> this month. You can fund up to{" "}
+            {currency(remainingBudgetC, event?.currency || "LKR")}.
           </div>
         )}
 
@@ -579,10 +801,20 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
             />
           </Field>
           <Field label="Date" required>
-            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={date} onChange={(e) => setDate(e.target.value)} />
+            <input
+              type="date"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
           </Field>
           <Field label="Note">
-            <input className="w-full rounded-xl border border-slate-300 px-3 py-2" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional" />
+            <input
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Optional"
+            />
           </Field>
         </div>
 
@@ -611,7 +843,7 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
   );
 }
 
-/* ===================== Spend (blocks > funded- spent) ===================== */
+/* ===================== Spend (blocks > funded - spent) ===================== */
 function SpendModal({ open, onClose, onSave, accounts, event }) {
   const [accountId, setAccountId] = useState("");
   const [subItemId, setSubItemId] = useState("");
@@ -708,7 +940,12 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
             />
           </Field>
           <Field label="Date" required>
-            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={date} onChange={(e) => setDate(e.target.value)} />
+            <input
+              type="date"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
           </Field>
         </div>
 
@@ -822,6 +1059,13 @@ export default function EventsPage() {
   const [accounts, setAccounts] = useState([]);
   const [items, setItems] = useState([]);
 
+  const [events, setEvents] = useState([]);
+
+  useEffect(() => {
+    Accounts.list().then(setAccounts);
+    Events.list().then(setEvents);
+  }, []);
+
   // VIEW PERIOD (month scoped by createdAt)
   const [viewPeriod, setViewPeriod] = useState(thisPeriod()); // YYYY-MM
   const prevMonth = () => {
@@ -876,14 +1120,9 @@ export default function EventsPage() {
   }, [viewPeriod]);
 
   /* ===== Scope events to VIEW PERIOD by createdAt (your requirement) ===== */
-  const scopedByMonth = useMemo(
-    () => items.filter((e) => inPeriodLocal(e.createdAt, viewPeriod)),
-    [items, viewPeriod]
-  );
+  const scopedByMonth = useMemo(() => items.filter((e) => inPeriodLocal(e.createdAt, viewPeriod)), [items, viewPeriod]);
 
   /* ===== Budget usage model should also respect the scoped month ===== */
-  // NOTE: backend exposes only total funded/spent per event. For per-month accuracy,
-  // you’d need per-ledger months. For now we approximate by summing within scoped events.
   const usedEventsCents = useMemo(
     () => scopedByMonth.reduce((sum, e) => sum + Number(e.spentCents || 0), 0),
     [scopedByMonth]
@@ -1033,15 +1272,25 @@ export default function EventsPage() {
               <button className="px-2 py-1 rounded-lg hover:bg-slate-100" onClick={nextMonth}>
                 ▶
               </button>
-              <button
-                className="ml-1 px-2 py-1 rounded-lg text-xs border hover:bg-slate-100"
-                onClick={() => setViewPeriod(thisPeriod())}
-              >
+              <button className="ml-1 px-2 py-1 rounded-lg text-xs border hover:bg-slate-100" onClick={() => setViewPeriod(thisPeriod())}>
                 This Month
               </button>
             </div>
             <button className="px-3 py-2 rounded-xl border" onClick={load}>
               Refresh
+            </button>
+            <button
+              onClick={() =>
+                generateEventExpensesReportPDF({
+                  rows: filtered,
+                  filters,
+                  period: viewPeriod,
+                  logoUrl: "/reportLogo.png",
+                })
+              }
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50 shadow-sm"
+            >
+              Generate Report
             </button>
             <button
               className="px-4 py-2 rounded-xl bg-indigo-600 text-white"
@@ -1086,7 +1335,11 @@ export default function EventsPage() {
               </div>
             </div>
 
-            <Bar value={usedEventsCents + earmarkedEventsCents} max={toCents(Number(plan?.events?.amount || 0))} hard={!!plan?.events?.hardCap} />
+            <Bar
+              value={usedEventsCents + earmarkedEventsCents}
+              max={toCents(Number(plan?.events?.amount || 0))}
+              hard={!!plan?.events?.hardCap}
+            />
 
             {!plan && (
               <div className="mt-2 text-xs text-slate-600">
@@ -1160,12 +1413,16 @@ export default function EventsPage() {
         </div>
 
         {/* Error */}
-        {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-red-700 text-sm">{err}</div>}
+        {err && (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-red-700 text-sm">{err}</div>
+        )}
 
         {/* Cards */}
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.length === 0 ? (
-            <div className="text-slate-500">No events in {viewPeriod}. Click <b>Create Event</b> to get started.</div>
+            <div className="text-slate-500">
+              No events in {viewPeriod}. Click <b>Create Event</b> to get started.
+            </div>
           ) : (
             filtered.map((ev) => (
               <EventCard
@@ -1217,13 +1474,27 @@ export default function EventsPage() {
                       <td className="px-3 py-2">{e.title}</td>
                       <td className="px-3 py-2">{e.mode}</td>
                       <td className="px-3 py-2">{accounts.find((a) => a._id === e.primaryAccountId)?.name || "—"}</td>
-                      <td className="px-3 py-2 text-right">{currency(e.targetCents, e.currency || "LKR")}</td>
-                      <td className="px-3 py-2 text-right">{currency(e.fundedCents, e.currency || "LKR")}</td>
+                      <td className="px-3 py-2 text-right">
+                        {currency(e.targetCents, e.currency || "LKR")}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {currency(e.fundedCents, e.currency || "LKR")}
+                      </td>
                       <td className="px-3 py-2 text-right">{currency(e.spentCents, e.currency || "LKR")}</td>
-                      <td className="px-3 py-2">{e?.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—"}</td>
-                      <td className="px-3 py-2">{e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—"}</td>
+                      <td className="px-3 py-2">
+                        {e?.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        {e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—"}
+                      </td>
                       <td className="px-3 py-2 text-right space-x-3">
-                        <button className="text-blue-600 hover:underline" onClick={() => { setEditing(e); setOpen(true); }}>
+                        <button
+                          className="text-blue-600 hover:underline"
+                          onClick={() => {
+                            setEditing(e);
+                            setOpen(true);
+                          }}
+                        >
                           Edit
                         </button>
                         <button className="text-emerald-600 hover:underline" onClick={() => setFunding(e)}>
@@ -1239,7 +1510,7 @@ export default function EventsPage() {
                             className={canDelete ? "text-red-600 hover:underline" : "text-slate-400 cursor-not-allowed"}
                             onClick={() => (canDelete ? onDeleteEvent(e) : null)}
                             disabled={!canDelete}
-                            title={canDelete ? "Delete" : (e.fundedCents > 0 ? "Remove funds first to delete" : "")}
+                            title={canDelete ? "Delete" : e.fundedCents > 0 ? "Remove funds first to delete" : ""}
                           >
                             Delete
                           </button>
@@ -1275,9 +1546,21 @@ export default function EventsPage() {
           budget={planWithUsage}
         />
 
-        <DefundModal open={!!defunding} onClose={() => setDefunding(null)} accounts={accounts} event={defunding} onSave={onDefundEvent} />
+        <DefundModal
+          open={!!defunding}
+          onClose={() => setDefunding(null)}
+          accounts={accounts}
+          event={defunding}
+          onSave={onDefundEvent}
+        />
 
-        <SpendModal open={!!spending} onClose={() => setSpending(null)} accounts={accounts} event={spending} onSave={onSpendEvent} />
+        <SpendModal
+          open={!!spending}
+          onClose={() => setSpending(null)}
+          accounts={accounts}
+          event={spending}
+          onSave={onSpendEvent}
+        />
       </div>
     </div>
   );

@@ -21,6 +21,7 @@ import Privacy from "./pages/privacy";
 import SignUp from "./pages/SignUpPage";
 import Terms from "./pages/TermsAndConditions";
 import Profile from "./pages/ProfilePage";
+import SeeHowItWorks from "./pages/SeeHowItWorks";
 const theme = createTheme({
   palette: { mode: "light", primary: { main: "#1976d2" } },
 });
@@ -40,6 +41,7 @@ export default function App() {
             <Route path="/contactus" element={<Contact />} />
             <Route path="/terms" element={<Terms />} />
             <Route path="/privacy" element={<Privacy />} />
+            <Route path="/seehow" element={<SeeHowItWorks />} />
           </Route>
 
           <Route element={<Layout />}>

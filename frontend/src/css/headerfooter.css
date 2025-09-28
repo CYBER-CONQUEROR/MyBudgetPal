@@ -103,19 +103,69 @@ body {
   margin-left: auto; /* Pushes the entire container to the far right */
 }
 
-.get-started-btn {
-  background: linear-gradient(90deg, #1976d2, #0d47a1);
-  color: #fff;
-  border: none;
-  padding: 15px 30px; /* Increased padding for a larger button */
-  border-radius: 10px; /* Slightly larger radius for modern look */
-  font-size: 1.2rem; /* Increased font size for better visibility */
-  font-weight: 700;
+.login-btn {
+  background: #ffffff;
+  color: #1976d2;
+  border: 1px solid #1976d2;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  margin-left: -70px;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(25, 118, 210, 0.15);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
   position: relative;
   overflow: hidden;
-  transition: all 0.3s ease;
+}
+
+.login-btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.6s ease;
+}
+
+.login-btn:hover::before {
+  left: 100%;
+}
+
+.login-btn:hover {
+  background: #1976d2;
+  color: #ffffff;
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 25px rgba(25, 118, 210, 0.4);
+  border-color: #1565c0;
+}
+
+.login-btn:active {
+  transform: translateY(-1px) scale(1.01);
+  box-shadow: 0 4px 15px rgba(25, 118, 210, 0.3);
+}
+
+.get-started-btn {
+  background: linear-gradient(135deg, #1976d2, #1565c0);
+  color: #fff;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(25, 118, 210, 0.3);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  position: relative;
+  overflow: hidden;
 }
 .get-started-btn::before {
   content: "";
@@ -124,12 +174,24 @@ body {
   left: -100%;
   width: 100%;
   height: 100%;
-  background: rgba(255, 255, 255, 0.2);
-  transform: skewX(-20deg);
-  transition: all 0.5s ease;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.6s ease;
 }
-.get-started-btn:hover::before { left: 100%; }
-.get-started-btn:hover { transform: scale(1.05); filter: brightness(1.1); }
+
+.get-started-btn:hover::before {
+  left: 100%;
+}
+
+.get-started-btn:hover {
+  background: linear-gradient(135deg, #1565c0, #0d47a1);
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 25px rgba(25, 118, 210, 0.5);
+}
+
+.get-started-btn:active {
+  transform: translateY(-1px) scale(1.01);
+  box-shadow: 0 4px 15px rgba(25, 118, 210, 0.4);
+}
 
 .hamburger {
   display: none;
@@ -168,8 +230,9 @@ body {
     display: none; 
   }
   
+  .login-btn,
   .get-started-btn {
-    display: none; /* Hide the desktop "Get Started" button on mobile */
+    display: none; /* Hide the desktop buttons on mobile */
   }
   
   .hamburger { 

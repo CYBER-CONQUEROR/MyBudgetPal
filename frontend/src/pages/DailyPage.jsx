@@ -1,8 +1,8 @@
 // src/pages/DailyPage.jsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X, FileText } from "lucide-react";
+import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X, FileText, TrendingUp, Wallet, PieChart as PieChartIcon, Calendar, CreditCard, Tag } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-import api from "../api/api.js"; // axios instance with baseURL=/api and withCredentials:true
+import api from "../api/api.js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -22,7 +22,7 @@ const inRange = (d, start, end) => {
   return ts >= s && ts <= e;
 };
 
-const PUBLIC_LOGO_URL = "/reportLogo.png"; // file should live in /public
+const PUBLIC_LOGO_URL = "/reportLogo.png";
 
 async function loadImageDataURL(url) {
   try {
@@ -102,44 +102,38 @@ async function generateExpensesPDFGrouped({
   filters,
   cats,
   accounts,
-  logoUrl = PUBLIC_LOGO_URL, // keep your default
+  logoUrl = PUBLIC_LOGO_URL,
 }) {
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
 
-  // ---- layout constants (tweak freely) ----
-  const margin = 40;          // base page margin
-  const headerH = 64;         // reserved height for header area (logo + titles)
-  const logoW = 44;           // rendered logo width/height (square)
+  const margin = 40;
+  const headerH = 64;
+  const logoW = 44;
   const logoH = 44;
-  const gap = 12;             // space between logo and text block
+  const gap = 12;
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
 
-  // ---- header: logo + text, side-by-side ----
-  let textX = margin; // will shift right if logo is drawn
-  const titleY = margin + 18;     // first text baseline
-  const subTitleY = titleY + 24;  // second line baseline
+  let textX = margin;
+  const titleY = margin + 18;
+  const subTitleY = titleY + 24;
 
   try {
     const logoData = await loadImageDataURL(logoUrl);
     if (logoData) {
-      // draw the logo anchored to top-left of header block
       doc.addImage(logoData, "PNG", margin, margin - 4, logoW, logoH);
-      textX = margin + logoW + gap; // push text right of the logo
+      textX = margin + logoW + gap;
     }
   } catch (e) {
     console.warn("Logo draw failed:", e);
     textX = margin;
   }
 
-  // titles
   doc.setFont("helvetica", "bold").setFontSize(22).text("My Budget Pal", textX, titleY);
   doc.setFont("helvetica", "normal").setFontSize(18).text("Day-to-Day Expense Report", textX, subTitleY);
 
-  // everything below starts AFTER the reserved header block
   let cursorY = margin + headerH;
 
-  // ---- filters block ----
   const filterLines = [
     `From: ${filters.start || "…"}   To: ${filters.end || "…"}`,
     filters.categoryId ? `Category: ${cats.find(c => c._id === filters.categoryId)?.name || "—"}` : "Category: All",
@@ -149,19 +143,16 @@ async function generateExpensesPDFGrouped({
   filterLines.forEach((line) => { doc.text(line, margin, cursorY); cursorY += 14; });
   doc.setTextColor(0);
 
-  // left vertical caption
   doc.setFontSize(9).setTextColor(120);
   doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
   doc.setTextColor(0);
 
-  // ---- group by category ----
   const grouped = {};
   rows.forEach(r => {
     const cat = r.categoryName || r.category?.name || "Uncategorized";
     (grouped[cat] ||= []).push(r);
   });
 
-  // page footer (page number)
   const addPageNumber = () => {
     const str = `Page ${doc.internal.getNumberOfPages()}`;
     doc.setFontSize(9);
@@ -171,14 +162,11 @@ async function generateExpensesPDFGrouped({
   let grandTotal = 0;
   let grandCount = 0;
 
-  // render each category block
   for (const [catName, catRows] of Object.entries(grouped)) {
-    // category title
     doc.setFont("helvetica", "bold").setFontSize(12);
     doc.text(catName, margin, cursorY + 10);
     cursorY += 16;
 
-    // build table rows
     const head = [["Title", "Date", "Account", "Description", "Amount (LKR)"]];
     const body = catRows.map(r => {
       grandTotal += r.amountCents || 0;
@@ -192,7 +180,6 @@ async function generateExpensesPDFGrouped({
       ];
     });
 
-    // render table
     autoTable(doc, {
       startY: cursorY,
       head,
@@ -204,10 +191,8 @@ async function generateExpensesPDFGrouped({
       margin: { left: margin, right: margin },
     });
 
-    // move cursor under the table
     const afterTableY = doc.lastAutoTable?.finalY || cursorY;
 
-    // subtotal line
     const catTotal = catRows.reduce((a, r) => a + (r.amountCents || 0), 0);
     doc.setFont("helvetica", "bold").setFontSize(10);
     doc.text(
@@ -218,19 +203,16 @@ async function generateExpensesPDFGrouped({
 
     cursorY = afterTableY + 30;
 
-    // if we're too close to the bottom, add a new page before the next category
     if (cursorY > pageH - 100) {
       doc.addPage();
       addPageNumber();
-      // reset vertical caption on new page (optional)
       doc.setFontSize(9).setTextColor(120);
       doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
       doc.setTextColor(0);
-      cursorY = margin; // start fresh below top margin on new page
+      cursorY = margin;
     }
   }
 
-  // ---- grand totals ----
   doc.setFont("helvetica", "bold").setFontSize(12);
   doc.text(`Total items: ${grandCount}`, margin, cursorY);
   doc.text(
@@ -244,7 +226,6 @@ async function generateExpensesPDFGrouped({
     cursorY + 36
   );
 
-  // ---- signature (always above footer area) ----
   const sigY = pageH - 60;
   doc.setFont("helvetica", "normal").setFontSize(12);
   doc.text("Signature : ...........................................", margin, sigY);
@@ -258,14 +239,11 @@ async function generateExpensesPDFGrouped({
    Page
    ========================= */
 export default function DailyPage() {
-  // Fixed month for budget UI
   const today = new Date();
   const fixedStart = ymd(startOfMonth(today));
   const fixedEnd = ymd(endOfMonth(today));
   const period = ym(today);
- 
 
-  // Filters for the LIST only
   const [filters, setFilters] = useState({
     title: "",
     description: "",
@@ -275,7 +253,6 @@ export default function DailyPage() {
     accountId: "",
   });
 
-  // Data
   const [listExpenses, setListExpenses] = useState([]);
   const [rawMonthExpenses, setRawMonthExpenses] = useState([]);
   const [cats, setCats] = useState([]);
@@ -321,7 +298,6 @@ export default function DailyPage() {
     reloadAll();
   }, [reloadAll]);
 
-  // Client-side filters
   const visibleExpenses = useMemo(() => {
     const termTitle = (filters.title || "").trim().toLowerCase();
     const termDesc = (filters.description || "").trim().toLowerCase();
@@ -340,7 +316,6 @@ export default function DailyPage() {
     });
   }, [listExpenses, filters]);
 
-  /* ---- Budget math (fixed month only) ---- */
   const monthExpenses = useMemo(() => {
     return (rawMonthExpenses || []).filter((e) => isSameMonth(new Date(e.date), today));
   }, [rawMonthExpenses, today]);
@@ -403,97 +378,167 @@ export default function DailyPage() {
   const hasAnyFilter =
     filters.title || filters.description || filters.start || filters.end || filters.categoryId || filters.accountId;
 
+  // Reset filters function
+  const handleResetFilters = () => {
+    setFilters({
+      title: "",
+      description: "",
+      start: "",
+      end: "",
+      categoryId: "",
+      accountId: "",
+    });
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="max-w-6xl mx-auto px-4 md:px-6 py-6">
+    <div className="min-h-screen bg-white text-slate-900">
+      <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div>
-            <h1 className="text-3xl font-extrabold tracking-tight flex items-center gap-2">
-              <BarChart3 className="text-indigo-600" /> Day-to-Day Expenses
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+          <div className="text-center md:text-left">
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-700 bg-clip-text text-transparent flex items-center justify-center md:justify-start gap-3">
+              <div className="p-2 bg-white rounded-2xl shadow-lg">
+                <BarChart3 className="text-blue-600" size={32} />
+              </div>
+              Day-to-Day Expenses
             </h1>
-            <p className="text-slate-600">This month’s plan and spending, with category usage.</p>
+            <p className="text-slate-600 mt-2 text-lg">Track and manage your daily spending with insights</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-center gap-3">
             <button
               onClick={() => setCatOpen(true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50 shadow-sm"
+              className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-medium text-blue-700 hover:bg-blue-50 shadow-lg hover:shadow-xl transition-all duration-200"
             >
-              <Settings size={16} /> Manage Categories
-            </button>
-            <button
-              onClick={onNew}
-              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 text-white px-4 py-2 text-sm font-semibold hover:bg-indigo-700 shadow-sm"
-            >
-              <Plus size={16} /> Add Expense
+              <Settings size={18} /> Manage Categories
             </button>
             <button
               onClick={() => generateExpensesPDFGrouped({ rows: visibleExpenses, filters, cats, accounts })}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50 shadow-sm"
+              className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-medium text-blue-700 hover:bg-blue-50 shadow-lg hover:shadow-xl transition-all duration-200"
             >
-              <FileText size={16} /> Generate Report
+              <FileText size={18} /> Generate Report
+            </button>
+            <button
+              onClick={onNew}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 text-sm font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
+            >
+              <Plus size={18} /> Add Expense
             </button>
           </div>
         </div>
+
         {/* Summary + usage */}
-        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Left: donut + stats */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">This Month — {period}</h3>
-              <span className="text-sm text-slate-500">Budget usage</span>
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
+          {/* Budget Overview Card */}
+          <div className="xl:col-span-2 rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <Wallet className="text-blue-600" size={24} />
+                Budget Overview — {period}
+              </h3>
+              <span className="text-sm font-medium text-blue-600 bg-blue-100 px-3 py-1 rounded-full">
+                Current Month
+              </span>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3">
-              <div className="h-[280px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Tooltip formatter={(v) => fmtLKR(v)} />
-                    <Pie
-                      data={pieData}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={88}
-                      outerRadius={120}
-                      startAngle={90}
-                      endAngle={-270}
-                      paddingAngle={1}
-                    >
-                      <Cell key="spent" fill="#6366F1" />
-                      <Cell key="remain" fill="#E5E7EB" />
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Donut Chart */}
+              <div className="flex flex-col items-center justify-center">
+                <div className="h-64 w-64 relative">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Tooltip 
+                        formatter={(v) => fmtLKR(v)}
+                        contentStyle={{ 
+                          backgroundColor: 'white',
+                          borderRadius: '12px',
+                          border: '1px solid #e2e8f0',
+                          boxShadow: '0 10px 25px rgba(0,0,0,0.1)'
+                        }}
+                      />
+                      <Pie
+                        data={pieData}
+                        dataKey="value"
+                        nameKey="name"
+                        innerRadius={70}
+                        outerRadius={100}
+                        startAngle={90}
+                        endAngle={-270}
+                        paddingAngle={2}
+                      >
+                        <Cell key="spent" fill="#4F46E5" />
+                        <Cell key="remain" fill="#E0E7FF" />
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-slate-800">
+                        {totalPlanned ? Math.round((monthSpent / totalPlanned) * 100) : 0}%
+                      </div>
+                      <div className="text-sm text-slate-500">Used</div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {plan ? (
-                <div className="grid grid-cols-3 gap-3">
-                  <MiniStat label="Total Budget" value={fmtLKR(totalPlanned)} />
-                  <MiniStat label="Spent (this month)" value={fmtLKR(monthSpent)} />
-                  <MiniStat label="Remaining" value={fmtLKR(remaining)} />
-                </div>
-              ) : (
-                <div className="text-center text-slate-500">
-                  No total budget configured for this month.
-                </div>
-              )}
+              {/* Stats */}
+              <div className="space-y-4">
+                {plan ? (
+                  <>
+                    <StatCard 
+                      label="Total Budget" 
+                      value={fmtLKR(totalPlanned)} 
+                      icon={<Wallet className="text-green-600" />}
+                    />
+                    <StatCard 
+                      label="Spent This Month" 
+                      value={fmtLKR(monthSpent)} 
+                      icon={<TrendingUp className="text-blue-600" />}
+                    />
+                    <StatCard 
+                      label="Remaining" 
+                      value={fmtLKR(remaining)} 
+                      icon={<PieChartIcon className="text-indigo-600" />}
+                    />
+                  </>
+                ) : (
+                  <div className="text-center py-8">
+                    <div className="text-slate-400 mb-2">No budget configured for this month</div>
+                    <button className="text-blue-600 hover:text-blue-700 font-medium">
+                      Set up budget plan →
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Right: category bars (month-only) */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-semibold">Categories — usage (this month)</h3>
-            <div className="mt-4 space-y-3">
-              {(subUsages.length ? subUsages : [{ name: "Unnamed", planned: 0, spent: 0, pct: 0 }]).map((r) => (
-                <div key={r.catId || r.name} className="rounded-xl border border-slate-100 p-3">
-                  <div className="flex items-center justify-between text-sm">
-                    <div className="font-medium">{r.name}</div>
-                    <div className="text-slate-500">
-                      {fmtLKR(r.spent)} / {fmtLKR(r.planned)} ({r.pct}%)
+          {/* Category Usage Card - FIXED SCROLL */}
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
+              <PieChartIcon className="text-blue-600" size={24} />
+              Category Usage
+            </h3>
+            <div className="space-y-4 h-96 overflow-y-auto pr-2 custom-scrollbar">
+              {(subUsages.length ? subUsages : [{ name: "No categories", planned: 0, spent: 0, pct: 0 }]).map((r, index) => (
+                <div key={r.catId || r.name || index} className="rounded-2xl border border-slate-100 bg-white p-4 hover:shadow-md transition-shadow">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="font-semibold text-slate-800 truncate flex-1">{r.name}</div>
+                    <div className="text-sm font-medium text-slate-600 ml-2">
+                      {r.pct}%
                     </div>
                   </div>
-                  <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden">
-                    <div className="h-2 rounded-full" style={{ width: `${r.pct}%`, backgroundColor: r.color || "#6366F1" }} />
+                  <div className="text-xs text-slate-500 mb-3">
+                    {fmtLKR(r.spent)} / {fmtLKR(r.planned)}
+                  </div>
+                  <div className="h-3 rounded-full bg-slate-100 overflow-hidden">
+                    <div 
+                      className="h-3 rounded-full transition-all duration-500 ease-out"
+                      style={{ 
+                        width: `${r.pct}%`, 
+                        backgroundColor: r.color || (r.pct > 90 ? '#EF4444' : r.pct > 75 ? '#F59E0B' : '#10B981')
+                      }}
+                    />
                   </div>
                 </div>
               ))}
@@ -501,162 +546,231 @@ export default function DailyPage() {
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 text-indigo-700 px-3 py-1 text-xs font-medium">
-                <Filter size={14} /> Filters
+        {/* Filters Card - UPDATED WITH EXTERNAL RESET BUTTON */}
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl mb-8">
+          {/* Reset Button - Now outside the card content area */}
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-6">
+            <div className="flex items-center gap-3 mb-4 lg:mb-0">
+              <div className="inline-flex items-center gap-2 rounded-2xl bg-blue-100 text-blue-700 px-4 py-2 font-medium">
+                <Filter size={18} /> Advanced Filters
               </div>
               {hasAnyFilter && (
                 <button
-                  onClick={() => { setFilters({ title: "", description: "", start: "", end: "", categoryId: "", accountId: "" }); }}
-                  className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-700 text-xs"
-                  title="Clear all"
+                  onClick={handleResetFilters}
+                  className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 hover:border-red-300 shadow-lg hover:shadow-xl transition-all duration-200"
                 >
-                  <X size={14}/> Clear all
+                  <RefreshCw size={16}/> Clear All Filters
                 </button>
               )}
             </div>
-            <div className="text-sm text-slate-500">
-              Budget Month: <strong>{period}</strong>
+            <div className="text-lg font-semibold text-blue-700 bg-blue-50 px-4 py-2 rounded-2xl">
+              Budget Month: <span className="text-slate-800">{period}</span>
             </div>
           </div>
 
-          {/* Row 1 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="relative">
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">Title</label>
-              <Search size={16} className="absolute left-2 top-9 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              <input
-                placeholder="Search by title"
-                value={filters.title}
-                onChange={(e) => setFilters(f => ({ ...f, title: e.target.value }))}
-                className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
-              />
+          {/* Filter Inputs Grid - WITHOUT Reset Button Inside */}
+          <div className="space-y-4">
+            {/* Row 1: Search Inputs */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="relative">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Search by Title
+                </label>
+                <div className="relative">
+                  <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <input
+                    placeholder="Enter title to search..."
+                    value={filters.title}
+                    onChange={(e) => setFilters(f => ({ ...f, title: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-300 bg-white pl-10 pr-4 py-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Search Description
+                </label>
+                <input
+                  placeholder="Search in descriptions..."
+                  value={filters.description}
+                  onChange={(e) => setFilters(f => ({ ...f, description: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">Description</label>
-              <input
-                placeholder="Search description"
-                value={filters.description}
-                onChange={(e) => setFilters(f => ({ ...f, description: e.target.value }))}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
-              />
-            </div>
-          </div>
 
-          {/* Row 2 */}
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">From</label>
-              <input
-                type="date"
-                value={filters.start}
-                onChange={(e) => setFilters(f => ({ ...f, start: e.target.value }))}
-                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">To</label>
-              <input
-                type="date"
-                value={filters.end}
-                onChange={(e) => setFilters(f => ({ ...f, end: e.target.value }))}
-                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">Category</label>
-              <select
-                value={filters.categoryId}
-                onChange={(e) => setFilters(f => ({ ...f, categoryId: e.target.value }))}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
-              >
-                <option value="">All</option>
-                {cats.map((c) => <option key={c._id} value={c._id}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-600 mb-1">Account</label>
-              <select
-                value={filters.accountId}
-                onChange={(e) => setFilters(f => ({ ...f, accountId: e.target.value }))}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500"
-              >
-                <option value="">All</option>
-                {accounts.map((a) => (
-                  <option key={a._id} value={a._id}>
-                    {a.name} {a.type ? `• ${a.type}` : ""} {a.institution ? `• ${a.institution}` : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex gap-2 md:justify-end">
-              <button
-                onClick={reloadAll}
-                className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-full bg-indigo-600 text-white px-4 py-2 text-sm font-semibold hover:bg-indigo-700 shadow-sm"
-                title="Apply filters"
-              >
-                <RefreshCw size={14} /> Apply
-              </button>
-              <button
-                onClick={() => { setFilters({ title: "", description: "", start: "", end: "", categoryId: "", accountId: "" }); }}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm hover:bg-slate-50 shadow-sm"
-                title="Reset filters"
-              >
-                <Filter size={14} /> Reset
-              </button>
+            {/* Row 2: Date, Category, Account Filters */}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  From Date
+                </label>
+                <div className="relative">
+                  <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <input
+                    type="date"
+                    value={filters.start}
+                    onChange={(e) => setFilters(f => ({ ...f, start: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-300 bg-white pl-10 pr-4 py-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  To Date
+                </label>
+                <div className="relative">
+                  <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <input
+                    type="date"
+                    value={filters.end}
+                    onChange={(e) => setFilters(f => ({ ...f, end: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-300 bg-white pl-10 pr-4 py-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Category
+                </label>
+                <div className="relative">
+                  <Tag size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <select
+                    value={filters.categoryId}
+                    onChange={(e) => setFilters(f => ({ ...f, categoryId: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-300 bg-white pl-10 pr-4 py-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all appearance-none"
+                  >
+                    <option value="">All Categories</option>
+                    {cats.map((c) => <option key={c._id} value={c._id}>{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Account
+                </label>
+                <div className="relative">
+                  <CreditCard size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <select
+                    value={filters.accountId}
+                    onChange={(e) => setFilters(f => ({ ...f, accountId: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-300 bg-white pl-10 pr-4 py-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all appearance-none"
+                  >
+                    <option value="">All Accounts</option>
+                    {accounts.map((a) => (
+                      <option key={a._id} value={a._id}>
+                        {a.name} {a.type ? `• ${a.type}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={reloadAll}
+                  className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
+                >
+                  <RefreshCw size={18} /> Apply
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Expenses list */}
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Expenses ({visibleExpenses.length})</h3>
+        {/* Expenses List Card - FIXED EXPENSE CARDS */}
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-6">
+            <h3 className="text-2xl font-bold text-slate-800 mb-4 lg:mb-0">
+              Expenses
+              <span className="ml-3 text-blue-600 bg-blue-100 px-3 py-1 rounded-full text-lg">
+                {visibleExpenses.length} items
+              </span>
+            </h3>
             {!accounts.length && (
-              <div className="inline-flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">
-                No accounts available — create one in Accounts.
+              <div className="inline-flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 px-4 py-2 rounded-xl font-medium">
+                ⚠️ No accounts available — create one in Accounts.
               </div>
             )}
           </div>
 
           {loading ? (
-            <div className="mt-6 text-slate-500">Loading…</div>
+            <div className="flex justify-center items-center py-12">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+            </div>
           ) : !visibleExpenses.length ? (
-            <div className="mt-6 text-slate-500">No expenses in this range.</div>
+            <div className="text-center py-12">
+              <div className="text-slate-400 text-lg mb-2">No expenses found</div>
+              <p className="text-slate-500 mb-4">Try adjusting your filters or add a new expense</p>
+              <button
+                onClick={onNew}
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
+              >
+                <Plus size={18} /> Add Your First Expense
+              </button>
+            </div>
           ) : (
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
               {visibleExpenses.map((e) => {
                 const amount = rupeesFrom(e.amountCents, e.amount);
-                const catName = e.categoryName || e.category?.name || e.category || "—";
+                const catName = e.categoryName || e.category?.name || e.category || "Uncategorized";
+                const account = accounts.find(a => String(a._id) === String(e.accountId));
+                
                 return (
-                  <div key={e._id} className="rounded-xl border border-slate-200 p-4 hover:shadow-sm transition">
-                    <div className="flex items-start justify-between">
-                      <div className="min-w-0 pr-3">
-                        <div className="text-base font-semibold truncate">{e.title}</div>
-                        <div className="text-sm text-slate-600">
-                          {new Date(e.date).toLocaleDateString()} • {catName} • {accountName(e.accountId)}
+                  <div key={e._id} className="rounded-2xl border border-slate-200 bg-white p-5 hover:shadow-lg hover:border-blue-200 transition-all duration-300 group">
+                    <div className="flex flex-col h-full">
+                      {/* Header with Title and Amount */}
+                      <div className="flex justify-between items-start mb-3">
+                        <h4 className="text-lg font-bold text-slate-800 truncate flex-1 mr-2 group-hover:text-blue-600 transition-colors">
+                          {e.title}
+                        </h4>
+                        <div className="text-xl font-bold text-slate-800 whitespace-nowrap">
+                          {fmtLKR(amount)}
                         </div>
-                        {e.description && <div className="mt-1 text-sm text-slate-700 line-clamp-3">{e.description}</div>}
                       </div>
-                      <div className="text-right">
-                        <div className="text-lg font-semibold">{fmtLKR(amount)}</div>
-                        <div className="mt-2 flex gap-2 justify-end">
-                          <button
-                            onClick={() => onEdit(e)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:bg-slate-50"
-                          >
-                            <Edit2 size={14} /> Edit
-                          </button>
-                          <button
-                            onClick={() => onDelete(e._id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
-                          >
-                            <Trash2 size={14} /> Delete
-                          </button>
+
+                      {/* Meta Information */}
+                      <div className="space-y-2 mb-4 flex-1">
+                        <div className="flex items-center gap-2 text-sm text-slate-600">
+                          <Tag size={14} className="text-blue-500" />
+                          <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs font-medium">
+                            {catName}
+                          </span>
                         </div>
+                        
+                        <div className="flex items-center gap-2 text-sm text-slate-600">
+                          <Calendar size={14} className="text-green-500" />
+                          <span>{new Date(e.date).toLocaleDateString()}</span>
+                        </div>
+                        
+                        <div className="flex items-center gap-2 text-sm text-slate-600">
+                          <CreditCard size={14} className="text-purple-500" />
+                          <span className="truncate">
+                            {account ? `${account.name}${account.type ? ` • ${account.type}` : ''}` : '—'}
+                          </span>
+                        </div>
+
+                        {/* Description */}
+                        {e.description && (
+                          <div className="mt-2 text-sm text-slate-700 bg-slate-50 rounded-lg px-3 py-2">
+                            {e.description}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex gap-2 pt-3 border-t border-slate-100">
+                        <button
+                          onClick={() => onEdit(e)}
+                          className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 hover:border-blue-300 transition-colors"
+                        >
+                          <Edit2 size={14} /> Edit
+                        </button>
+                        <button
+                          onClick={() => onDelete(e._id)}
+                          className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 hover:border-red-300 transition-colors"
+                        >
+                          <Trash2 size={14} /> Delete
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -691,35 +805,69 @@ export default function DailyPage() {
           onClose={(changed) => { setCatOpen(false); if (changed) reloadAll(); }}
         />
       )}
+
+      {/* Custom Scrollbar Styles */}
+      <style jsx>{`
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: #f1f5f9;
+          border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+      `}</style>
     </div>
   );
 }
 
 /* =========================
-   Small pieces
+   New StatCard Component
    ========================= */
-function MiniStat({ label, value }) {
+function StatCard({ label, value, icon }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
-      <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="text-lg font-semibold text-slate-900">{value}</div>
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 hover:shadow-md transition-shadow">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm font-semibold text-slate-600 uppercase tracking-wide">{label}</div>
+          <div className="text-2xl font-bold text-slate-800 mt-1">{value}</div>
+        </div>
+        <div className="p-3 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50">
+          {icon}
+        </div>
+      </div>
     </div>
   );
 }
 
 /* =========================
-   Expense Form Modal
+   Expense Form Modal 
    ========================= */
 function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
   const isEdit = !!initial;
   const [title, setTitle] = useState(initial?.title || "");
   const [amount, setAmount] = useState(
-    (initial?.amountCents != null ? initial.amountCents / 100 : initial?.amount) || ""
+    initial?.amountCents != null
+      ? (initial.amountCents / 100).toString()
+      : initial?.amount != null
+      ? initial.amount.toString()
+      : ""
   );
   const [categoryId, setCategoryId] = useState(
-    initial?.categoryId || initial?.category?._id || categories?.[0]?._id || ""
+    initial?.categoryId ||
+      initial?.category?._id ||
+      categories?.[0]?._id ||
+      ""
   );
-  const [date, setDate] = useState(initial?.date ? ymd(new Date(initial.date)) : ymd(new Date()));
+  const [date, setDate] = useState(
+    initial?.date ? ymd(new Date(initial.date)) : ymd(new Date())
+  );
   const [accountId, setAccountId] = useState(
     initial?.accountId ||
       accounts.find((a) => a.type === "cash")?._id ||
@@ -730,121 +878,234 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
+  function ymd(d) {
+    return d.toISOString().split("T")[0];
+  }
+
+  // format amount input safely
+  const formatAmountInput = (val) => {
+    if (typeof val !== "string") {
+      return "";
+    }
+
+    let clean = val.replace(/[^\d.]/g, "");
+    if (clean.startsWith(".")) clean = clean.slice(1);
+    const parts = clean.split(".");
+    if (parts.length > 2) clean = parts[0] + "." + parts.slice(1).join("");
+    if (parts[1]) clean = parts[0] + "." + parts[1].slice(0, 2);
+
+    const [intPart, decPart] = clean.split(".");
+    const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return decPart !== undefined ? `${formattedInt}.${decPart}` : formattedInt;
+  };
+
+  const handleAmountChange = (e) => {
+    const formatted = formatAmountInput(e.target.value);
+    setAmount(formatted);
+  };
+
+  const handleTitleChange = (e) => {
+    const val = e.target.value.replace(/[^a-zA-Z\s]/g, "");
+    setTitle(val);
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     setErr("");
+
     if (!title.trim()) return setErr("Title is required");
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) return setErr("Enter a valid amount");
+
+    // amount conversion
+    let amt = 0;
+    try {
+      const cleanAmount = amount.replace(/,/g, "");
+      amt = Number(cleanAmount);
+      if (!Number.isFinite(amt) || amt <= 0) {
+        return setErr("Enter a valid amount");
+      }
+    } catch (error) {
+      return setErr("Enter a valid amount");
+    }
+
     if (!categoryId) return setErr("Pick a category");
     if (!accountId) return setErr("Pick an account");
+
+    // --- Date Validation ---
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const pickedDate = new Date(date);
+    pickedDate.setHours(0, 0, 0, 0);
+
+    const minDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    minDate.setHours(0, 0, 0, 0);
+
+    if (pickedDate.getTime() > today.getTime()) {
+      return setErr("Future dates are not allowed");
+    }
+    if (pickedDate.getTime() < minDate.getTime()) {
+      return setErr("Only last 30 days allowed");
+    }
 
     const payload = {
       title: title.trim(),
       amount: amt,
-      amountCents: centsFrom(amt),
+      amountCents: Math.round(amt * 100),
       categoryId,
       date,
       description: description || "",
       accountId,
     };
 
-    try { setSaving(true); await onSave(payload); } finally { setSaving(false); }
+    try {
+      setSaving(true);
+      await onSave(payload);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-        <h3 className="text-lg font-semibold">{isEdit ? "Edit Expense" : "Add Expense"}</h3>
-        <form onSubmit={submit} className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div className="relative w-full max-w-md rounded-3xl border border-white bg-white/95 backdrop-blur-sm p-6 shadow-2xl">
+        {/* Compact Header */}
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-700 bg-clip-text text-transparent">
+            {isEdit ? "Edit Expense" : "Add Expense"}
+          </h3>
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            <X size={20} className="text-slate-500" />
+          </button>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          {/* Compact Form Grid */}
+          <div className="grid grid-cols-1 gap-3">
+            {/* Title */}
             <div>
-              <label className="block text-sm font-medium text-slate-700">Title</label>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">
+                Title *
+              </label>
               <input
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
-                placeholder="Groceries"
+                onChange={handleTitleChange}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                placeholder="Groceries, Transportation..."
               />
             </div>
+
+            {/* Amount */}
             <div>
-              <label className="block text-sm font-medium text-slate-700">Amount (LKR)</label>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">
+                Amount (LKR) *
+              </label>
               <input
-                type="number" min="0" step="0.01"
+                type="text"
+                inputMode="decimal"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                onChange={handleAmountChange}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                placeholder="20,000.00"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            {/* Category */}
             <div>
-              <label className="block text-sm font-medium text-slate-700">Category</label>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">
+                Category *
+              </label>
               <select
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
               >
                 {categories.map((c) => (
-                  <option key={c._id} value={c._id}>{c.name}</option>
+                  <option key={c._id} value={c._id}>
+                    {c.name}
+                  </option>
                 ))}
               </select>
             </div>
+
+            {/* Date */}
             <div>
-              <label className="block text-sm font-medium text-slate-700">Date</label>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">
+                Date *
+              </label>
               <input
                 type="date"
                 value={date}
+                min={ymd(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))}
+                max={ymd(new Date())}
                 onChange={(e) => setDate(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
               />
             </div>
           </div>
 
+          {/* Account */}
           <div>
-            <label className="block text-sm font-medium text-slate-700">Account</label>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">
+              Account *
+            </label>
             <select
               value={accountId}
               onChange={(e) => setAccountId(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
             >
               {accounts.map((a) => (
                 <option key={a._id} value={a._id}>
-                  {a.name} {a.type ? `• ${a.type}` : ""} {a.institution ? `• ${a.institution}` : ""}
+                  {a.name} {a.type ? `• ${a.type}` : ""}
                 </option>
               ))}
             </select>
           </div>
 
+          {/* Description */}
           <div>
-            <label className="block text-sm font-medium text-slate-700">Description (optional)</label>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">
+              Description (optional)
+            </label>
             <textarea
-              rows={3}
+              rows={2}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
-              placeholder="Notes…"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all resize-none"
+              placeholder="Additional notes..."
             />
           </div>
 
-          {err && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>}
+          {/* Error Message */}
+          {err && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-700 text-sm">
+              {err}
+            </div>
+          )}
 
-          <div className="flex justify-end gap-2 pt-2">
+          {/* Buttons */}
+          <div className="flex justify-end gap-3 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50"
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="rounded-xl bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-70"
+              className="rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all disabled:opacity-70 disabled:transform-none"
             >
-              {saving ? "Saving…" : isEdit ? "Save" : "Add"}
+              {saving ? "Saving..." : isEdit ? "Save" : "Add"}
             </button>
           </div>
         </form>
@@ -854,7 +1115,7 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
 }
 
 /* =========================
-   Category Manager Modal
+   Category Manager Modal (COMPACT)
    ========================= */
 function CategoryManagerModal({ categories, expenses, onClose }) {
   const [list, setList] = useState(categories || []);
@@ -870,7 +1131,6 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   const add = async () => {
     const name = (newName || "").trim();
     if (!name) return;
-    // client-side dup guard (case-insensitive)
     if (list.some(c => (c.name || "").toLowerCase() === name.toLowerCase())) {
       alert("Category already exists.");
       return;
@@ -923,44 +1183,76 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={() => onClose(true)} />
-      <div className="relative w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-        <h3 className="text-lg font-semibold">Manage Categories</h3>
-
-        <div className="mt-4 flex gap-2">
-          <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="New category"
-            className="flex-1 rounded-xl border border-slate-300 px-3 py-2"
-          />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => onClose(true)} />
+      <div className="relative w-full max-w-md rounded-3xl border border-white bg-white/95 backdrop-blur-sm p-6 shadow-2xl max-h-[80vh] overflow-hidden">
+        {/* Compact Header */}
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-700 bg-clip-text text-transparent">
+            Manage Categories
+          </h3>
           <button
-            onClick={add}
-            disabled={busy}
-            className="rounded-xl bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-70"
+            onClick={() => onClose(true)}
+            className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
           >
-            Add
+            <X size={20} className="text-slate-500" />
           </button>
         </div>
 
-        <div className="mt-4 divide-y divide-slate-100 border border-slate-200 rounded-xl">
-          {list.map((c) => (
-            <CatRow
-              key={c._id}
-              cat={c}
-              used={inUseCount(c._id)}
-              onRename={(name) => rename(c._id, name)}
-              onDelete={() => remove(c._id)}
+        {/* Add Category */}
+        <div className="mb-4">
+          <label className="block text-sm font-semibold text-slate-700 mb-2">Add New Category</label>
+          <div className="flex gap-2">
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Category name"
+              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+              onKeyPress={(e) => e.key === 'Enter' && add()}
             />
-          ))}
-          {!list.length && <div className="p-4 text-sm text-slate-500">No categories yet.</div>}
+            <button
+              onClick={add}
+              disabled={busy}
+              className="rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all disabled:opacity-70 disabled:transform-none"
+            >
+              Add
+            </button>
+          </div>
         </div>
 
-        <div className="mt-4 flex justify-end">
+        {/* Categories List */}
+        <div className="border border-slate-200 rounded-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-slate-200">
+            <div className="grid grid-cols-12 gap-3 text-xs font-semibold text-slate-700">
+              <div className="col-span-6">Name</div>
+              <div className="col-span-3 text-center">Used</div>
+              <div className="col-span-3 text-center">Actions</div>
+            </div>
+          </div>
+          
+          <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
+            {list.map((c) => (
+              <CompactCatRow
+                key={c._id}
+                cat={c}
+                used={inUseCount(c._id)}
+                onRename={(name) => rename(c._id, name)}
+                onDelete={() => remove(c._id)}
+              />
+            ))}
+            {!list.length && (
+              <div className="px-4 py-6 text-center text-slate-500 text-sm">
+                No categories yet
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Close Button */}
+        <div className="flex justify-end pt-4">
           <button
             onClick={() => onClose(true)}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
           >
             Close
           </button>
@@ -970,51 +1262,79 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   );
 }
 
-function CatRow({ cat, used, onRename, onDelete }) {
+function CompactCatRow({ cat, used, onRename, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(cat.name);
+  
+  const handleSave = () => {
+    if (value.trim() && value !== cat.name) {
+      onRename(value);
+    }
+    setEditing(false);
+  };
+
+  const handleCancel = () => {
+    setValue(cat.name);
+    setEditing(false);
+  };
+
   return (
-    <div className="p-3 flex items-center gap-3">
-      {editing ? (
-        <>
-          <input
-            className="flex-1 rounded-lg border border-slate-300 px-3 py-2"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-          />
-          <button
-            onClick={() => { setEditing(false); onRename(value); }}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-white text-sm"
-          >
-            Save
-          </button>
-          <button
-            onClick={() => { setEditing(false); setValue(cat.name); }}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm"
-          >
-            Cancel
-          </button>
-        </>
-      ) : (
-        <>
-          <div className="flex-1">
-            <div className="font-medium">{cat.name}</div>
-            <div className="text-xs text-slate-500">{used} in use</div>
-          </div>
-          <button
-            onClick={() => setEditing(true)}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:bg-slate-50"
-          >
-            <Edit2 size={14} /> Rename
-          </button>
-          <button
-            onClick={onDelete}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
-          >
-            <Trash2 size={14} /> Delete
-          </button>
-        </>
-      )}
+    <div className="px-4 py-3 hover:bg-slate-50 transition-colors">
+      <div className="grid grid-cols-12 gap-2 items-center">
+        <div className="col-span-6">
+          {editing ? (
+            <input
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSave()}
+              autoFocus
+            />
+          ) : (
+            <div className="font-medium text-slate-800 text-sm truncate">{cat.name}</div>
+          )}
+        </div>
+        
+        <div className="col-span-3 text-center">
+          <span className="inline-flex items-center justify-center bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs">
+            {used}
+          </span>
+        </div>
+        
+        <div className="col-span-3 flex justify-center gap-1">
+          {editing ? (
+            <>
+              <button
+                onClick={handleSave}
+                className="inline-flex items-center rounded bg-green-600 px-2 py-1 text-xs text-white hover:bg-green-700 transition-colors"
+              >
+                ✓
+              </button>
+              <button
+                onClick={handleCancel}
+                className="inline-flex items-center rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                ✕
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => setEditing(true)}
+                className="inline-flex items-center rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100 transition-colors"
+              >
+                Edit
+              </button>
+              <button
+                onClick={onDelete}
+                className="inline-flex items-center rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100 transition-colors"
+              >
+                Del
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

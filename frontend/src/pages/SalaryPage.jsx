@@ -310,56 +310,69 @@ export default function SalaryPage() {
 function IncomeFormModal({ accounts, initial, onClose, onSave }) {
   const isEdit = !!initial;
 
-  // helpers to build YYYY-MM-DD in local time
+  // helper to build YYYY-MM-DD in local time
   const pad = (n) => String(n).padStart(2, "0");
   const ymdLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
-  // current month bounds
+  // today date and last 30 days
   const today = new Date();
-  const monthStart = ymdLocal(new Date(today.getFullYear(), today.getMonth(), 1));
-  const monthEnd   = ymdLocal(new Date(today.getFullYear(), today.getMonth() + 1, 0));
+  const past30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const minDate = ymdLocal(past30);
+  const maxDate = ymdLocal(today);
 
   const [accountId, setAccountId] = useState(initial?.accountId || "");
   const [title, setTitle] = useState(initial?.title || "");
   const [category, setCategory] = useState(initial?.category || "Salary");
   const [amount, setAmount] = useState(initial ? (initial.amountCents / 100).toFixed(2) : "");
-
-  // initial date = today or existing date, clamped to current month window
-  const initialDate = (() => {
-    const d = initial?.date ? new Date(initial.date) : new Date();
-    let s = ymdLocal(d);
-    if (s < monthStart) s = monthStart;
-    if (s > monthEnd)   s = monthEnd;
-    return s;
-  })();
+  const initialDate = initial?.date ? ymdLocal(new Date(initial.date)) : maxDate;
   const [date, setDate] = useState(initialDate);
-
   const [description, setDescription] = useState(initial?.description || "");
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // guard if something external tries to push date outside current month
-  useEffect(() => {
-    if (date < monthStart) setDate(monthStart);
-    if (date > monthEnd)   setDate(monthEnd);
-  }, [monthStart, monthEnd, date]);
+  // format amount input with commas and max 2 decimals
+  const formatAmountInput = (val) => {
+    let clean = val.replace(/[^\d.]/g, "");
+    if (clean.startsWith(".")) clean = clean.slice(1);
+    const parts = clean.split(".");
+    if (parts.length > 2) clean = parts[0] + "." + parts.slice(1).join("");
+    if (parts[1]) clean = parts[0] + "." + parts[1].slice(0, 2);
+    const [intPart, decPart] = clean.split(".");
+    const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return decPart !== undefined ? `${formattedInt}.${decPart}` : formattedInt;
+  };
+
+  const handleAmountChange = (e) => {
+    setAmount(formatAmountInput(e.target.value));
+  };
+
+  const handleTitleChange = (e) => {
+    const val = e.target.value.replace(/[^a-zA-Z\s]/g, "");
+    setTitle(val);
+  };
 
   const submit = async (e) => {
-    e.preventDefault(); setErr("");
+    e.preventDefault();
+    setErr("");
+
     if (!accountId) return setErr("Pick an account");
     if (!title.trim()) return setErr("Title is required");
 
-    const cents = Math.round(Number((amount || "0").toString()) * 100);
-    if (!Number.isFinite(cents) || cents <= 0) return setErr("Enter a valid amount");
+    const amt = Number(amount.replace(/,/g, ""));
+    if (!Number.isFinite(amt) || amt <= 0) return setErr("Enter a valid amount");
 
-    // enforce current-month clamp in validation too
-    if (date < monthStart) return setErr(`Date must be on or after ${monthStart}`);
-    if (date > monthEnd)   return setErr(`Date must be on or before ${monthEnd}`);
+    const pickedDate = new Date(date);
+    const todayD = new Date();
+    const past30D = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    todayD.setHours(0, 0, 0, 0);
+    past30D.setHours(0, 0, 0, 0);
+    if (pickedDate > todayD) return setErr("Future dates are not allowed");
+    if (pickedDate < past30D) return setErr("Only last 30 days allowed");
 
     const payload = {
       accountId,
       title: title.trim(),
-      amountCents: cents,
+      amountCents: Math.round(amt * 100),
       date,
       category,
       description: description || undefined,
@@ -368,8 +381,8 @@ function IncomeFormModal({ accounts, initial, onClose, onSave }) {
     try {
       setSaving(true);
       await onSave(payload, initial?._id);
-    } catch (e) {
-      setErr(e.message || "Save failed");
+    } catch (err) {
+      setErr(err.message || "Save failed");
     } finally {
       setSaving(false);
     }
@@ -377,31 +390,50 @@ function IncomeFormModal({ accounts, initial, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose}/>
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
       <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
         <h3 className="text-lg font-semibold">{isEdit ? "Edit Income" : "Add Income"}</h3>
 
         <form onSubmit={submit} className="mt-4 space-y-4">
+          {/* Account & Title */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700">Account</label>
-              <select value={accountId} onChange={(e)=>setAccountId(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+              >
                 <option value="">Select account</option>
-                {accounts.map(a => <option key={a._id} value={a._id}>{a.name}</option>)}
+                {accounts.map((a) => (
+                  <option key={a._id} value={a._id}>
+                    {a.name}
+                  </option>
+                ))}
               </select>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700">
                 Title <span className="text-rose-600">*</span>
               </label>
-              <input value={title} onChange={(e)=>setTitle(e.target.value)} placeholder="Salary Sep" className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2"/>
+              <input
+                value={title}
+                onChange={handleTitleChange}
+                placeholder="Salary Sep"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+              />
             </div>
           </div>
 
+          {/* Category, Amount & Date */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700">Category</label>
-              <select value={category} onChange={(e)=>setCategory(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+              >
                 <option>Salary</option>
                 <option>Bonus</option>
                 <option>Interest</option>
@@ -411,33 +443,59 @@ function IncomeFormModal({ accounts, initial, onClose, onSave }) {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700">Amount (LKR)</label>
-              <input type="number" min="0" step="0.01" value={amount} onChange={(e)=>setAmount(e.target.value)} placeholder="0.00" className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2"/>
+              <input
+                type="text"
+                value={amount}
+                onChange={handleAmountChange}
+                placeholder="0.00"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700">Date</label>
               <input
                 type="date"
                 value={date}
-                min={monthStart}
-                max={monthEnd}
-                onChange={(e)=>setDate(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2"
+                min={minDate}
+                max={maxDate}
+                onChange={(e) => setDate(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
               />
-              <p className="mt-1 text-xs text-slate-500">Allowed: {monthStart} → {monthEnd}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Allowed: {minDate} → {maxDate}
+              </p>
             </div>
           </div>
 
+          {/* Notes */}
           <div>
             <label className="block text-sm font-medium text-slate-700">Notes</label>
-            <textarea rows={3} value={description} onChange={(e)=>setDescription(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2"/>
+            <textarea
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+            />
           </div>
 
-          {err && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>}
+          {err && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>
+          )}
 
           <div className="flex items-center justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-700 hover:bg-slate-50">Cancel</button>
-            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700 disabled:opacity-70">
-              {saving ? "Saving..." : (isEdit ? "Save Changes" : "Add Income")}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700 disabled:opacity-70"
+            >
+              {saving ? "Saving..." : isEdit ? "Save Changes" : "Add Income"}
             </button>
           </div>
         </form>
@@ -446,17 +504,29 @@ function IncomeFormModal({ accounts, initial, onClose, onSave }) {
   );
 }
 
-function ConfirmDialog({ title, message, confirmLabel="Confirm", variant="primary", onCancel, onConfirm }) {
-  const style = variant === "danger" ? "bg-gradient-to-r from-rose-600 to-red-600 hover:opacity-95" : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95";
+// ===================== Confirm Dialog =====================
+function ConfirmDialog({ title, message, confirmLabel = "Confirm", variant = "primary", onCancel, onConfirm }) {
+  const style =
+    variant === "danger"
+      ? "bg-gradient-to-r from-rose-600 to-red-600 hover:opacity-95"
+      : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onCancel}/>
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
       <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
         <h3 className="text-lg font-semibold">{title}</h3>
         <p className="mt-2 text-slate-700">{message}</p>
         <div className="mt-4 flex items-center justify-end gap-2">
-          <button onClick={onCancel} className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50">Cancel</button>
-          <button onClick={onConfirm} className={`rounded-xl px-4 py-2 text-white ${style}`}>{confirmLabel}</button>
+          <button
+            onClick={onCancel}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button onClick={onConfirm} className={`rounded-xl px-4 py-2 text-white ${style}`}>
+            {confirmLabel}
+          </button>
         </div>
       </div>
     </div>

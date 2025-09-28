@@ -55,15 +55,62 @@ function Field({ label, required, children, hint }) {
 }
 
 function Modal({ open, onClose, title, children, wide = false }) {
+  const titleId = React.useId();
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => e.key === "Escape" && onClose?.();
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden"; // lock page scroll
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
+
   return (
-    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className={`bg-white rounded-2xl w-full ${wide ? 'max-w-5xl' : 'max-w-2xl'} shadow-xl border border-slate-200`} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
-          <h3 className="text-lg font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-700 text-xl" aria-label="Close">×</button>
+    <div className="fixed inset-0 z-50">
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/30"
+        aria-hidden="true"
+        onClick={onClose}
+      />
+
+      {/* Scrollable overlay */}
+      <div className="fixed inset-0 overflow-y-auto overscroll-contain">
+        <div className="flex min-h-full items-center justify-center p-4">
+          {/* Panel */}
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            className={`relative w-full ${wide ? "max-w-5xl" : "max-w-2xl"} rounded-2xl bg-white shadow-xl border border-slate-200 flex flex-col max-h-[90vh]`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header (fixed) */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 shrink-0">
+              <h3 id={titleId} className="text-lg font-semibold">
+                {title}
+              </h3>
+              <button
+                onClick={onClose}
+                className="text-slate-500 hover:text-slate-700 text-xl"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Content (scrolls) */}
+            <div className="p-5 overflow-y-auto">
+              {children}
+            </div>
+          </div>
         </div>
-        <div className="p-5">{children}</div>
       </div>
     </div>
   );
@@ -223,7 +270,94 @@ async function generateCommitmentsPDF({ rows, filters, title = "Bank Commitment 
 /* ===================== Form (Add/Edit) ===================== */
 function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }) {
   const now = new Date();
-  const [f, setF] = useState({
+
+  /* =========================
+     Tiny inline message bubble
+     ========================= */
+  const Bubble = ({ show, message }) => (
+    <div
+      className={
+        "pointer-events-none absolute left-0 top-[100%] mt-1 text-xs rounded-lg " +
+        "bg-rose-50 text-rose-700 border border-rose-300 px-2 py-1 shadow-sm " +
+        "transition-opacity duration-150 " + (show ? "opacity-100" : "opacity-0")
+      }
+      role="status"
+      aria-live="polite"
+    >
+      {message}
+    </div>
+  );
+
+  const bubbleTimerRef = React.useRef(null);
+  const [bubble, setBubble] = React.useState({ key: null, msg: "" });
+  const showBubble = (key, msg, ms = 1600) => {
+    if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
+    setBubble({ key, msg });
+    bubbleTimerRef.current = setTimeout(() => setBubble({ key: null, msg: "" }), ms);
+  };
+
+  /* =========================
+     Helpers (local)
+     ========================= */
+  const pad = (n) => String(n).padStart(2, "0");
+  const ymd = (d) => {
+    if (!d) return "";
+    const dt = (d instanceof Date) ? d : new Date(d);
+    return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+  };
+
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const last  = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const minThisMonth = ymd(first);
+  const maxThisMonth = ymd(last);
+
+  // Format numeric string with comma grouping; optionally keep a trailing dot while typing.
+  const formatCommas = (s, keepTrailingDot = false) => {
+    if (!s) return "";
+    s = s.replace(/[^0-9.]/g, ""); // keep digits and dot
+    const parts = s.split(".");
+    const intP = (parts[0] ?? "0");
+    const decP = (parts[1] ?? "");
+    const intClean = (intP || "0").replace(/^0+(?=\d)/, "") || "0";
+    const withCommas = intClean.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    if (keepTrailingDot) return `${withCommas}.`;
+    return decP !== "" ? `${withCommas}.${decP}` : withCommas;
+  };
+
+  const cleanAmount = (s) => (s || "").replace(/,/g, "");
+
+  // Valid positive money with up to 2 decimals
+  const moneyRegex = /^\d{0,15}(\.\d{0,2})?$/;
+
+  const clampToThisMonth = (value, fieldKey, label) => {
+    const v = new Date(value);
+    if (isNaN(v)) return value;
+    if (v < first) {
+      showBubble(fieldKey, `${label} must be within this month.`);
+      return ymd(first);
+    }
+    if (v > last) {
+      showBubble(fieldKey, `${label} must be within this month.`);
+      return ymd(last);
+    }
+    return ymd(v);
+  };
+
+  const moneyToCents = (s) => {
+    const raw = cleanAmount(s);
+    if (!raw || !moneyRegex.test(raw)) return 0;
+    const [i, d = ""] = raw.split(".");
+    const dec = d.padEnd(2, "0").slice(0, 2);
+    return (Number(i || "0") * 100) + Number(dec || "0");
+  };
+
+  const setRecurrence = (patch) =>
+    setF((prev) => ({ ...prev, recurrence: { ...prev.recurrence, ...patch } }));
+
+  /* =========================
+     State (original + defaults)
+     ========================= */
+  const [f, setF] = React.useState({
     _id: null,
     accountId: accounts[0]?._id || "",
     name: "",
@@ -240,21 +374,25 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     endDate: "",
   });
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     if (initial) {
       const rec = initial.recurrence || {};
       const endChoice = rec.endDate ? "date" : (Number.isInteger(rec.remaining) ? "count" : "never");
+      const initialAmount = (typeof fromCents === "function")
+        ? String(fromCents(initial.amountCents || 0))
+        : String((initial.amountCents || 0) / 100);
+
       setF({
         _id: initial._id,
         accountId: initial.accountId,
         name: initial.name || "",
         category: initial.category || "Loan",
-        amount: fromCents(initial.amountCents),
+        amount: formatCommas(initialAmount),
         currency: initial.currency || "LKR",
         dueDate: ymd(initial.dueDate || initial.paidAt || now),
         status: initial.status || "pending",
-        paidAt: ymd(initial.paidAt) || "",
+        paidAt: initial.paidAt ? ymd(initial.paidAt) : "",
         isRecurring: !!initial.isRecurring,
         recurrence: {
           frequency: rec.frequency || "monthly",
@@ -272,33 +410,189 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     }
   }, [open, initial, accounts]);
 
+  /* =========================
+     Derived (original)
+     ========================= */
   const getAccount = (id) => accounts.find(a => a._id === id);
   const currentBalanceCents = Number(getAccount(f.accountId)?.balanceCents || 0);
   const wantToPay = f.status === "paid";
-  const amountCents = cents(f.amount);
+
+  const amountCents = moneyToCents(f.amount);
   const wouldGoNegative = wantToPay && amountCents > currentBalanceCents;
 
-  const plan = periodPlan; // may be null
-  const commitCap = Number(plan?.commitments?.amount || 0); // rupees
-  const commitCapCents = toCents(commitCap);
+  const plan = periodPlan;
+  const commitCap = Number(plan?.commitments?.amount || 0);
+  const commitCapCents = (typeof toCents === "function") ? toCents(commitCap) : Math.round(commitCap * 100);
   const usedCents = Number(plan?._usedCommitmentsCents || 0);
-  const pendingCents = Number(plan?._pendingCommitmentsCents || 0);
 
   const wouldBreachHardCap =
     !!plan?.commitments?.hardCap &&
     wantToPay &&
-    isInPeriod(f.paidAt || f.dueDate, plan?.period) &&
+    (typeof isInPeriod === "function" ? isInPeriod(f.paidAt || f.dueDate, plan?.period) : true) &&
     usedCents + amountCents > commitCapCents;
 
+  /* =========================
+     Field handlers (with bubbles)
+     ========================= */
+  const onNameKeyDown = (e) => {
+    const allowed = /^[A-Za-z\s]$/;
+    if (e.key.length === 1 && !allowed.test(e.key)) {
+      e.preventDefault();
+      showBubble("name", "Letters and spaces only.");
+    }
+  };
+  const onNameChange = (e) => {
+    const v = e.target.value;
+    if (/^[A-Za-z\s]*$/.test(v)) setF({ ...f, name: v });
+    else showBubble("name", "Letters and spaces only.");
+  };
+  const onNamePaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    if (!/^[A-Za-z\s]*$/.test(text)) {
+      e.preventDefault();
+      showBubble("name", "Letters and spaces only.");
+    }
+  };
+
+  // AMOUNT — allow decimals after digits, keep trailing dot while typing, limit to 2 decimal digits.
+  const onAmountKeyDown = (e) => {
+    if (["-", "e", "E", "+"].includes(e.key)) {
+      e.preventDefault();
+      showBubble("amount", "Positive number, up to 2 decimals.");
+    }
+  };
+  const onAmountPaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    const raw = cleanAmount(text);
+    if (!moneyRegex.test(raw)) {
+      e.preventDefault();
+      showBubble("amount", "Invalid amount format.");
+    }
+  };
+  const onAmountChange = (e) => {
+    const raw = cleanAmount(e.target.value);
+
+    // empty → allow
+    if (raw === "") { setF({ ...f, amount: "" }); return; }
+
+    // allow only digits and at most one dot
+    if (!/^\d*\.?\d*$/.test(raw)) { showBubble("amount", "Only digits and one dot."); return; }
+
+    // cannot start with a dot
+    if (raw.startsWith(".")) { showBubble("amount", "Start with a number (e.g., 0.50)."); return; }
+
+    // if decimals present, max 2
+    const [intPart, decPart = ""] = raw.split(".");
+    if (decPart.length > 2) { showBubble("amount", "Up to 2 decimal places only."); return; }
+
+    // positivity already guaranteed by regex + no '-'
+
+    // keep a trailing dot while typing "123."
+    const keepDot = raw.endsWith(".") && raw.includes(".") && decPart.length === 0;
+
+    setF({ ...f, amount: formatCommas(raw, keepDot) });
+  };
+  const onAmountBlur = () => {
+    const raw = cleanAmount(f.amount);
+    if (!raw) return;
+    let [i = "0", d = ""] = raw.split(".");
+    if (d.length === 0) d = "00";
+    else if (d.length === 1) d = d + "0";
+    const fixed = `${String(Number(i)).replace(/^0+(?=\d)/, "") || "0"}.${d.slice(0, 2)}`;
+    setF((prev) => ({ ...prev, amount: formatCommas(fixed) }));
+  };
+
+  const onDueChange = (e) => {
+    const clamped = clampToThisMonth(e.target.value, "dueDate", "Due date");
+    setF({ ...f, dueDate: clamped });
+  };
+  const onPaidAtChange = (e) => {
+    const clamped = clampToThisMonth(e.target.value, "paidAt", "Paid at");
+    setF({ ...f, paidAt: clamped });
+  };
+  const onStartDateChange = (e) => {
+    const clamped = clampToThisMonth(e.target.value, "startDate", "Start date");
+    setRecurrence({ startDate: clamped });
+  };
+
+  const blockNonPositiveIntKeys = (e, keyName) => {
+    if (["-", "e", "E", "+", ".", ","].includes(e.key)) {
+      e.preventDefault();
+      showBubble(keyName, "Positive whole numbers only.");
+    }
+  };
+  const onIntervalChange = (e) => {
+    const v = e.target.value.replace(/[^\d]/g, "");
+    if (v === "") { setRecurrence({ interval: "" }); return; }
+    setRecurrence({ interval: Math.max(1, parseInt(v, 10)) });
+  };
+  const onRemainingChange = (e) => {
+    const v = e.target.value.replace(/[^\d]/g, "");
+    if (v === "") { setF({ ...f, remaining: "" }); return; }
+    setF({ ...f, remaining: String(Math.max(1, parseInt(v, 10))) });
+  };
+
+  /* =========================
+     Submit (bubble validation)
+     ========================= */
   const submit = async (e) => {
     e.preventDefault();
-    if (wouldGoNegative) { alert("You can’t pay this — insufficient funds in the selected account."); return; }
-    if (wouldBreachHardCap) { alert("This payment would exceed your Commitments budget (hard cap) for this month."); return; }
+
+    if (!f.name || !/^[A-Za-z\s]+$/.test(f.name)) {
+      showBubble("name", "Enter a valid name (letters & spaces).");
+      return;
+    }
+    if (!moneyRegex.test(cleanAmount(f.amount)) || moneyToCents(f.amount) <= 0) {
+      showBubble("amount", "Enter a positive amount with up to 2 decimals.");
+      return;
+    }
+
+    const mainDateStr = f.status === "paid" ? f.paidAt : f.dueDate;
+    const mainDate = new Date(mainDateStr);
+    if (isNaN(mainDate) || mainDate < first || mainDate > last) {
+      showBubble(f.status === "paid" ? "paidAt" : "dueDate", "Date must be within this month.");
+      return;
+    }
+
+    if (f.isRecurring) {
+      const sd = new Date(f.recurrence.startDate);
+      if (isNaN(sd) || sd < first || sd > last) {
+        showBubble("startDate", "Start date must be within this month.");
+        return;
+      }
+      if (!Number.isInteger(Number(f.recurrence.interval)) || Number(f.recurrence.interval) < 1) {
+        showBubble("interval", "Interval must be a positive whole number.");
+        return;
+      }
+      if (f.endChoice === "count") {
+        if (!Number.isInteger(Number(f.remaining)) || Number(f.remaining) < 1) {
+          showBubble("remaining", "Occurrences must be a positive whole number.");
+          return;
+        }
+      }
+      if (f.endChoice === "date" && f.endDate) {
+        const ed = new Date(f.endDate);
+        if (isNaN(ed)) {
+          showBubble("endDate", "Enter a valid end date.");
+          return;
+        }
+      }
+    }
+
+    if (wouldGoNegative) {
+      showBubble("amount", "Insufficient funds in the selected account.");
+      return;
+    }
+    if (wouldBreachHardCap) {
+      showBubble("amount", "Exceeds Commitments hard cap for this month.");
+      return;
+    }
+
     await onSave(f._id, {
       accountId: f.accountId,
       name: f.name,
       category: f.category,
-      amountCents: cents(f.amount),
+      amountCents: moneyToCents(f.amount),
       currency: f.currency,
       dueDate: new Date(f.dueDate),
       status: f.status,
@@ -311,11 +605,14 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
         byWeekday: f.recurrence.byWeekday,
         byMonthDay: f.recurrence.byMonthDay,
         ...(f.endChoice === "count" ? { remaining: Number(f.remaining || 0) } : {}),
-        ...(f.endChoice === "date" ? { endDate: new Date(f.endDate) } : {}),
+        ...(f.endChoice === "date" ? { endDate: f.endDate ? new Date(f.endDate) : undefined } : {}),
       } : undefined,
     });
   };
 
+  /* =========================
+     Render
+     ========================= */
   return (
     <Modal open={open} onClose={onClose} title={f._id ? "Edit Commitment" : "Add Commitment"}>
       <form onSubmit={submit} className="grid gap-4">
@@ -333,11 +630,15 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
               ))}
             </select>
             <p className="text-xs text-slate-500 mt-1">
-              Available balance: {LKR.format((currentBalanceCents || 0) / 100)}
+              Available balance: {typeof LKR !== "undefined"
+                ? LKR.format((Number(getAccount(f.accountId)?.balanceCents || 0)) / 100)
+                : (Number(getAccount(f.accountId)?.balanceCents || 0) / 100).toLocaleString("en-LK", { style: "currency", currency: "LKR" })}
             </p>
           </Field>
+
           <Field label="Category">
-            <select className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.category}
               onChange={(e) => setF({ ...f, category: e.target.value })}
             >
@@ -348,22 +649,43 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
 
         <div className="grid md:grid-cols-2 gap-4">
           <Field label="Name" required>
-            <input className="w-full rounded-xl border border-slate-300 px-3 py-2"
-              value={f.name}
-              onChange={(e) => setF({ ...f, name: e.target.value })}
-            />
+            <div className="relative">
+              <input
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                value={f.name}
+                onKeyDown={onNameKeyDown}
+                onChange={onNameChange}
+                onPaste={onNamePaste}
+                placeholder="e.g. Insurance Premium"
+              />
+              <Bubble show={bubble.key === "name"} message={bubble.msg} />
+            </div>
           </Field>
+
           <Field label="Amount" required>
-            <input type="number" step="0.01" min="0" className="w-full rounded-xl border border-slate-300 px-3 py-2"
-              value={f.amount}
-              onChange={(e) => setF({ ...f, amount: e.target.value })}
-            />
+            <div className="relative">
+              <input
+                inputMode="decimal"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                value={f.amount}
+                onKeyDown={onAmountKeyDown}
+                onChange={onAmountChange}
+                onPaste={onAmountPaste}
+                onBlur={onAmountBlur}
+                placeholder="e.g. 100,000.00"
+              />
+              <Bubble show={bubble.key === "amount"} message={bubble.msg} />
+              <p className="text-xs text-slate-500 mt-1">
+                Positive number, comma-grouped, up to 2 decimals. (Auto-adds decimals on blur.)
+              </p>
+            </div>
           </Field>
         </div>
 
         <div className="grid md:grid-cols-3 gap-4">
           <Field label="Status" required>
-            <select className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.status}
               onChange={(e) => setF({ ...f, status: e.target.value })}
             >
@@ -374,30 +696,52 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
 
           {f.status === "paid" ? (
             <Field label="Paid at" required>
-              <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                value={f.paidAt || ymd(new Date())}
-                onChange={(e) => setF({ ...f, paidAt: e.target.value })}
-              />
+              <div className="relative">
+                <input
+                  type="date"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                  value={f.paidAt || ymd(now)}
+                  min={minThisMonth}
+                  max={maxThisMonth}
+                  onChange={onPaidAtChange}
+                />
+                <Bubble show={bubble.key === "paidAt"} message={bubble.msg} />
+              </div>
             </Field>
           ) : (
             <Field label="Due date" required>
-              <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                value={f.dueDate}
-                onChange={(e) => setF({ ...f, dueDate: e.target.value })}
-              />
+              <div className="relative">
+                <input
+                  type="date"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                  value={f.dueDate}
+                  min={minThisMonth}
+                  max={maxThisMonth}
+                  onChange={onDueChange}
+                />
+                <Bubble show={bubble.key === "dueDate"} message={bubble.msg} />
+              </div>
             </Field>
           )}
 
           <Field label="Currency">
-            <input className="w-full rounded-xl border border-slate-300 px-3 py-2"
-              value={f.currency}
-              onChange={(e) => setF({ ...f, currency: e.target.value })}
+            <input
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100"
+              value={f.currency || "LKR"}
+              readOnly
+              disabled
+              title="Currency is fixed"
             />
           </Field>
         </div>
 
         <div className="flex items-center gap-3">
-          <input id="rec" type="checkbox" checked={f.isRecurring} onChange={(e) => setF({ ...f, isRecurring: e.target.checked })} />
+          <input
+            id="rec"
+            type="checkbox"
+            checked={f.isRecurring}
+            onChange={(e) => setF({ ...f, isRecurring: e.target.checked })}
+          />
           <label htmlFor="rec" className="text-sm text-slate-700">Make this recurring</label>
         </div>
 
@@ -405,9 +749,10 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
           <div className="grid gap-4 p-3 rounded-xl border border-slate-200">
             <div className="grid md:grid-cols-4 gap-4">
               <Field label="Frequency" required>
-                <select className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                <select
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2"
                   value={f.recurrence.frequency}
-                  onChange={(e) => setF({ ...f, recurrence: { ...f.recurrence, frequency: e.target.value } })}
+                  onChange={(e) => setRecurrence({ frequency: e.target.value })}
                 >
                   <option value="monthly">Monthly</option>
                   <option value="weekly">Weekly</option>
@@ -415,39 +760,66 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                   <option value="yearly">Yearly</option>
                 </select>
               </Field>
+
               <Field label="Interval" required>
-                <input type="number" min="1" className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                  value={f.recurrence.interval}
-                  onChange={(e) => setF({ ...f, recurrence: { ...f.recurrence, interval: e.target.value } })}
-                />
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                    value={f.recurrence.interval}
+                    onKeyDown={(e) => blockNonPositiveIntKeys(e, "interval")}
+                    onChange={onIntervalChange}
+                    placeholder="1"
+                  />
+                  <Bubble show={bubble.key === "interval"} message={bubble.msg} />
+                </div>
               </Field>
+
               <Field label="Start date" required>
-                <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                  value={f.recurrence.startDate}
-                  onChange={(e) => setF({ ...f, recurrence: { ...f.recurrence, startDate: e.target.value } })}
-                />
+                <div className="relative">
+                  <input
+                    type="date"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                    value={f.recurrence.startDate}
+                    min={minThisMonth}
+                    max={maxThisMonth}
+                    onChange={onStartDateChange}
+                  />
+                  <Bubble show={bubble.key === "startDate"} message={bubble.msg} />
+                </div>
               </Field>
-              <Field label={f.recurrence.frequency === "weekly" ? "Weekdays (0-6)" : "Days of month"}>
+
+              <Field label={f.recurrence.frequency === "weekly" ? "Weekdays (0–6)" : "Days of month"}>
                 {f.recurrence.frequency === "weekly" ? (
-                  <input className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                  <input
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2"
                     placeholder="1,3,5"
                     value={(f.recurrence.byWeekday || []).join(",")}
-                    onChange={(e) => setF({
-                      ...f, recurrence: {
-                        ...f.recurrence,
-                        byWeekday: e.target.value.split(",").map(s => Number(s.trim())).filter(Number.isInteger)
-                      }
+                    onChange={(e) => setRecurrence({
+                      byWeekday: e.target.value
+                        .split(",")
+                        .map(s => s.trim())
+                        .filter(Boolean)
+                        .map(Number)
+                        .filter(Number.isInteger)
+                        .filter(n => n >= 0 && n <= 6),
                     })}
                   />
                 ) : (
-                  <input className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                  <input
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2"
                     placeholder="1,15,28"
                     value={(f.recurrence.byMonthDay || []).join(",")}
-                    onChange={(e) => setF({
-                      ...f, recurrence: {
-                        ...f.recurrence,
-                        byMonthDay: e.target.value.split(",").map(s => Number(s.trim())).filter(Number.isInteger)
-                      }
+                    onChange={(e) => setRecurrence({
+                      byMonthDay: e.target.value
+                        .split(",")
+                        .map(s => s.trim())
+                        .filter(Boolean)
+                        .map(Number)
+                        .filter(Number.isInteger)
+                        .filter(n => n >= 1 && n <= 31),
                     })}
                   />
                 )}
@@ -461,25 +833,41 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                     <input type="radio" name="endChoice" checked={f.endChoice === "never"} onChange={() => setF({ ...f, endChoice: "never" })} />
                     <span className="text-sm">Never</span>
                   </label>
+
                   <label className="flex items-center gap-2">
                     <input type="radio" name="endChoice" checked={f.endChoice === "count"} onChange={() => setF({ ...f, endChoice: "count" })} />
                     <span className="text-sm">After</span>
-                    <input
-                      disabled={f.endChoice !== "count"}
-                      type="number" min="1" className="w-24 rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100"
-                      value={f.remaining}
-                      onChange={(e) => setF({ ...f, remaining: e.target.value })}
-                    />
+                    <div className="relative">
+                      <input
+                        disabled={f.endChoice !== "count"}
+                        type="number"
+                        min="1"
+                        step="1"
+                        className="w-24 rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100"
+                        value={f.remaining}
+                        onKeyDown={(e) => blockNonPositiveIntKeys(e, "remaining")}
+                        onChange={onRemainingChange}
+                      />
+                      <Bubble show={bubble.key === "remaining"} message={bubble.msg} />
+                    </div>
                     <span className="text-sm">occurrences</span>
                   </label>
+
                   <label className="flex items-center gap-2">
                     <input type="radio" name="endChoice" checked={f.endChoice === "date"} onChange={() => setF({ ...f, endChoice: "date" })} />
                     <span className="text-sm">On</span>
-                    <input disabled={f.endChoice !== "date"} type="date"
-                      className="rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100"
-                      value={f.endDate}
-                      onChange={(e) => setF({ ...f, endDate: e.target.value })}
-                    />
+                    <div className="relative">
+                      <input
+                        disabled={f.endChoice !== "date"}
+                        type="date"
+                        className="rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100"
+                        value={f.endDate}
+                        min={minThisMonth}
+                        max={maxThisMonth}
+                        onChange={(e) => setF({ ...f, endDate: e.target.value })}
+                      />
+                      <Bubble show={bubble.key === "endDate"} message={bubble.msg} />
+                    </div>
                   </label>
                 </div>
               </Field>
@@ -488,7 +876,8 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
         )}
 
         <div className="flex items-center gap-3 pt-2">
-          <button type="submit"
+          <button
+            type="submit"
             className={`px-4 py-2 rounded-xl text-white ${(wouldGoNegative || wouldBreachHardCap) ? "bg-slate-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}
             disabled={wouldGoNegative || wouldBreachHardCap}
           >

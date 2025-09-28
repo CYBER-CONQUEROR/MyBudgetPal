@@ -1304,7 +1304,7 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
 
         <div className="mt-4 divide-y divide-slate-100 border border-slate-200 rounded-xl">
           {list.map((c) => (
-            <CatRow
+            <CompactCatRow
               key={c._id}
               cat={c}
               used={inUseCount(c._id)}

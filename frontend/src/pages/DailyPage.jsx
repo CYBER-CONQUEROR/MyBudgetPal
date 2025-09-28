@@ -860,21 +860,96 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   const [list, setList] = useState(categories || []);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // tiny inline bubble
+  const Bubble = ({ show, message }) => (
+    <div
+      className={
+        "pointer-events-none absolute left-0 top-[100%] mt-1 text-xs rounded-lg " +
+        "bg-rose-50 text-rose-700 border border-rose-300 px-2 py-1 shadow-sm " +
+        "transition-opacity duration-150 " + (show ? "opacity-100" : "opacity-0")
+      }
+      role="status"
+      aria-live="polite"
+    >
+      {message}
+    </div>
+  );
+  const [bubble, setBubble] = useState({ key: null, msg: "" });
+  const bubbleTimerRef = React.useRef(null);
+  const showBubble = (key, msg, ms = 1600) => {
+    if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
+    setBubble({ key, msg });
+    bubbleTimerRef.current = setTimeout(() => setBubble({ key: null, msg: "" }), ms);
+  };
+
   React.useEffect(() => setList(categories || []), [categories]);
 
   const inUseCount = React.useCallback(
-    (catId) => expenses.filter((e) => String(e.categoryId) === String(catId) || String(e.category?._id) === String(catId)).length,
+    (catId) =>
+      expenses.filter(
+        (e) =>
+          String(e.categoryId) === String(catId) ||
+          String(e.category?._id) === String(catId)
+      ).length,
     [expenses]
   );
 
+  // ===== letters-only guards (Unicode letters + spaces) =====
+  const lettersOnlyFullRe = /^[\p{L}\s]*$/u;   // for full string validation
+  const lettersOnlyCharRe = /^[\p{L}\s]$/u;    // for single char keypress
+
+  const onNewNameKeyDown = (e) => {
+    // allow control/navigation keys
+    const ctrlKeys = [
+      "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+      "Home", "End", "Tab", "Enter"
+    ];
+    if (ctrlKeys.includes(e.key)) return;
+
+    // if it's a single printable char, ensure it's a letter or space
+    if (e.key.length === 1 && !lettersOnlyCharRe.test(e.key)) {
+      e.preventDefault();
+      showBubble("newName", "Letters and spaces only.");
+    }
+  };
+
+  const onNewNameChange = (e) => {
+    const v = e.target.value;
+    if (lettersOnlyFullRe.test(v)) {
+      setNewName(v);
+    } else {
+      // block update and hint
+      showBubble("newName", "Letters and spaces only.");
+    }
+  };
+
+  const onNewNamePaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    if (!lettersOnlyFullRe.test(text)) {
+      e.preventDefault();
+      showBubble("newName", "Letters and spaces only.");
+    }
+  };
+
+  const isDuplicate = (name) =>
+    list.some((c) => (c.name || "").toLowerCase() === name.toLowerCase());
+
   const add = async () => {
     const name = (newName || "").trim();
-    if (!name) return;
-    // client-side dup guard (case-insensitive)
-    if (list.some(c => (c.name || "").toLowerCase() === name.toLowerCase())) {
-      alert("Category already exists.");
+    if (!name) {
+      showBubble("newName", "Name is required.");
       return;
     }
+    if (!lettersOnlyFullRe.test(name)) {
+      showBubble("newName", "Letters and spaces only.");
+      return;
+    }
+    if (isDuplicate(name)) {
+      showBubble("newName", "Category already exists.");
+      return;
+    }
+
     setBusy(true);
     try {
       await categoriesAPI.create(name);
@@ -882,6 +957,7 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
       setList(res || []);
       setNewName("");
     } catch (e) {
+      // keeping network/server failures as alerts so you notice action failure
       alert(e.message || "Failed to create category");
     } finally {
       setBusy(false);
@@ -891,7 +967,13 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   const rename = async (id, next) => {
     const name = (next || "").trim();
     if (!name) return;
-    if (list.some(c => c._id !== id && (c.name || "").toLowerCase() === name.toLowerCase())) {
+    if (!lettersOnlyFullRe.test(name)) {
+      // we can’t show a bubble here because the input lives inside CatRow;
+      // just block silently — or swap to alert if you prefer.
+      alert("Letters and spaces only.");
+      return;
+    }
+    if (list.some((c) => c._id !== id && (c.name || "").toLowerCase() === name.toLowerCase())) {
       alert("Category already exists.");
       return;
     }
@@ -909,7 +991,14 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
 
   const remove = async (id) => {
     const used = inUseCount(id);
-    if (!window.confirm(used ? `This category is used by ${used} expense(s). Delete and reassign to "Other"?` : "Delete category?")) return;
+    if (
+      !window.confirm(
+        used
+          ? `This category is used by ${used} expense(s). Delete and reassign to "Other"?`
+          : "Delete category?"
+      )
+    )
+      return;
     setBusy(true);
     try {
       await categoriesAPI.remove(id, "Other");
@@ -922,6 +1011,12 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
     }
   };
 
+  // quick validity to disable the Add button
+  const addDisabled =
+    busy ||
+    !(newName || "").trim() ||
+    !lettersOnlyFullRe.test((newName || "").trim());
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={() => onClose(true)} />
@@ -929,15 +1024,20 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
         <h3 className="text-lg font-semibold">Manage Categories</h3>
 
         <div className="mt-4 flex gap-2">
-          <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="New category"
-            className="flex-1 rounded-xl border border-slate-300 px-3 py-2"
-          />
+          <div className="relative flex-1">
+            <input
+              value={newName}
+              onChange={onNewNameChange}
+              onKeyDown={onNewNameKeyDown}
+              onPaste={onNewNamePaste}
+              placeholder="New category"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            />
+            <Bubble show={bubble.key === "newName"} message={bubble.msg} />
+          </div>
           <button
             onClick={add}
-            disabled={busy}
+            disabled={addDisabled}
             className="rounded-xl bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-70"
           >
             Add
@@ -954,7 +1054,9 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
               onDelete={() => remove(c._id)}
             />
           ))}
-          {!list.length && <div className="p-4 text-sm text-slate-500">No categories yet.</div>}
+          {!list.length && (
+            <div className="p-4 text-sm text-slate-500">No categories yet.</div>
+          )}
         </div>
 
         <div className="mt-4 flex justify-end">

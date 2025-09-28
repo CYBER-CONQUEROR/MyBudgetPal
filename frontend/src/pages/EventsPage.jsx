@@ -67,20 +67,60 @@ function Field({ label, required, children, hint }) {
 }
 
 function Modal({ open, onClose, title, children, max = "max-w-2xl" }) {
+  // Lock body scroll while open
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  // Close on ESC
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => e.key === "Escape" && onClose?.();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
+
   return (
-    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      {/* Black overlay */}
+      <div className="absolute inset-0 bg-black/60" />
+
+      {/* Modal panel */}
       <div
-        className={`bg-white rounded-2xl w-full ${max} shadow-xl border border-slate-200`}
+        className={`relative bg-white rounded-2xl w-full ${max} shadow-xl border border-slate-200 max-h-[85vh] overflow-hidden flex flex-col`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+        {/* Header (fixed inside the panel) */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 shrink-0">
           <h3 className="text-lg font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-700 text-xl" aria-label="Close">
+          <button
+            onClick={onClose}
+            className="text-slate-500 hover:text-slate-700 text-xl"
+            aria-label="Close"
+          >
             ×
           </button>
         </div>
-        <div className="p-5">{children}</div>
+
+        {/* Scrollable content area */}
+        <div
+          className="p-5 overflow-y-auto"
+          style={{ WebkitOverflowScrolling: "touch" }} // smooth momentum scrolling on iOS
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -298,40 +338,195 @@ function Bar({ value, max, hard = false }) {
 }
 
 /* ===================== Create/Edit Event Modal ===================== */
+// --- shared helpers (module scope) ---
+const cleanAmount = (s) => (s || "").replace(/,/g, "");
+const moneyRegex = /^\d{0,15}(\.\d{0,2})?$/; // up to 2 decimals
+
+const formatCommas = (raw, keepDot = false) => {
+  if (!raw) return "";
+  const [i = "0", d = ""] = raw.split(".");
+  const intClean = (i || "0").replace(/^0+(?=\d)/, "") || "0";
+  const grouped = intClean.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  if (keepDot) return `${grouped}.`;
+  return d !== "" ? `${grouped}.${d}` : grouped;
+};
+
+const toNumber = (s) => {
+  const raw = cleanAmount(s);
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const toLocalYMD = (d) => {
+  const dt = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return dt.toISOString().slice(0, 10);
+};
+
+// caret helpers
+const nonCommaCountBefore = (str, caret) => {
+  let count = 0;
+  for (let i = 0; i < caret; i++) if (str[i] !== ",") count++;
+  return count;
+};
+const caretFromNonCommaCount = (str, n) => {
+  if (n <= 0) return 0;
+  let count = 0;
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] !== ",") count++;
+    if (count >= n) return i + 1;
+  }
+  return str.length;
+};
+
+// ---------- HOISTED COMPONENT (fixes focus loss) ----------
+function MoneyInput({ value, onValue, cap = Infinity, placeholder = "0.00", "data-test": dataTest }) {
+  const inputRef = React.useRef(null);
+  const [tip, setTip] = React.useState("");
+  const [showTip, setShowTip] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!showTip) return;
+    const t = setTimeout(() => setShowTip(false), 1500);
+    return () => clearTimeout(t);
+  }, [showTip]);
+
+  const onKeyDown = (e) => {
+    if (["-", "e", "E", "+"].includes(e.key)) e.preventDefault();
+  };
+  const onPaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    const raw = cleanAmount(text);
+    if (!moneyRegex.test(raw) || raw.startsWith(".")) e.preventDefault();
+  };
+  const onChange = (e) => {
+    const el = e.target;
+    const before = el.value;
+    const caret = el.selectionStart ?? before.length;
+    const nonCommaLeft = nonCommaCountBefore(before, caret);
+
+    const raw = cleanAmount(before);
+    if (raw === "") {
+      onValue("");
+      requestAnimationFrame(() => {
+        const n = inputRef.current;
+        if (n) n.setSelectionRange(0, 0);
+      });
+      return;
+    }
+
+    if (!/^\d*\.?\d*$/.test(raw)) return; // digits + one dot
+    if (raw.startsWith(".")) return;      // no leading dot
+
+    const [_, d = ""] = raw.split(".");
+    if (d.length > 2) return;             // max 2 dp
+
+    const candidate = Number(raw);
+    if (!Number.isFinite(candidate)) return;
+
+    const hardCap = Math.max(0, Number(cap ?? 0));
+    let nextStr;
+    if (candidate > hardCap) {
+      const capDecLen = Math.min(2, (String(hardCap).split(".")[1] || "").length);
+      const capped = hardCap.toFixed(capDecLen);
+      nextStr = formatCommas(capped);
+      setTip(`Capped at ${formatCommas(hardCap.toFixed(2))}`);
+      setShowTip(true);
+    } else {
+      const keepDot = raw.endsWith(".") && raw.includes(".") && d.length === 0;
+      nextStr = formatCommas(raw, keepDot);
+    }
+
+    onValue(nextStr);
+
+    // restore caret after React re-render
+    requestAnimationFrame(() => {
+      const n = inputRef.current;
+      if (!n) return;
+      const newCaret = caretFromNonCommaCount(nextStr, nonCommaLeft);
+      n.setSelectionRange(newCaret, newCaret);
+    });
+  };
+  const onBlur = () => {
+    const raw = cleanAmount(value);
+    if (!raw) return;
+    let n = Math.min(Number(raw), Math.max(0, Number(cap ?? 0)));
+    if (!Number.isFinite(n) || n < 0) n = 0;
+    const fixed = formatCommas(n.toFixed(2));
+    onValue(fixed);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) {
+        const end = fixed.length;
+        el.setSelectionRange(end, end);
+      }
+    });
+  };
+
+  return (
+    <div className="relative">
+      <input
+        ref={inputRef}
+        className="w-full rounded-xl border border-slate-300 px-3 py-2"
+        inputMode="decimal"
+        value={value}
+        onKeyDown={onKeyDown}
+        onPaste={onPaste}
+        onChange={onChange}
+        onBlur={onBlur}
+        placeholder={placeholder}
+        data-test={dataTest}
+      />
+      {showTip && (
+        <div className="absolute -top-2 right-0 translate-y-[-100%] max-w-[240px]">
+          <div className="px-2 py-1 text-xs rounded-md bg-rose-50 text-rose-700 border border-rose-200 shadow-sm">
+            {tip}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===================== YOUR FORM (unchanged API) =====================
 function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
   const isEdit = !!initial?._id;
 
-  const [f, setF] = useState({
+  const [f, setF] = React.useState({
     _id: null,
     title: "",
-    mode: "single", // single | itemized
+    mode: "single",
     primaryAccountId: accounts[0]?._id || "",
     currency: "LKR",
     startDate: "",
     endDate: "",
     dueDate: "",
     notes: "",
-    target: "", // for single
-    subItems: [{ name: "Gift", target: "" }], // for itemized
+    target: "",
+    subItems: [{ name: "Gift", target: "" }],
   });
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     if (initial) {
       setF({
         _id: initial._id,
-        title: initial.title || "",
+        title: (initial.title || "").replace(/[^A-Za-z ]/g, "").slice(0, 100),
         mode: initial.mode || "single",
         primaryAccountId: initial.primaryAccountId || (accounts[0]?._id || ""),
         currency: initial.currency || "LKR",
-        startDate: ymd(initial?.dates?.start),
-        endDate: ymd(initial?.dates?.end),
-        dueDate: ymd(initial?.dates?.due),
+        startDate: initial?.dates?.start ? toLocalYMD(new Date(initial.dates.start)) : "",
+        endDate: initial?.dates?.end ? toLocalYMD(new Date(initial.dates.end)) : "",
+        dueDate: initial?.dates?.due ? toLocalYMD(new Date(initial.dates.due)) : "",
         notes: initial.notes || "",
-        target: fromCents(initial.targetCents || 0),
+        target: formatCommas((Number(fromCents(initial.targetCents || 0)) || 0).toFixed(2)),
         subItems:
           (initial.mode || "single") === "itemized"
-            ? (initial.subItems || []).map((s) => ({ id: s._id, name: s.name, target: fromCents(s.targetCents || 0) }))
+            ? (initial.subItems || []).map((s) => ({
+                id: s._id,
+                name: s.name,
+                target: formatCommas((Number(fromCents(s.targetCents || 0)) || 0).toFixed(2)),
+              }))
             : [{ name: "Gift", target: "" }],
       });
     } else {
@@ -339,18 +534,36 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
     }
   }, [open, initial, accounts]);
 
-  const itemizedTotal = useMemo(
-    () => (f.subItems || []).reduce((sum, it) => sum + Number(it.target || 0), 0),
+  const handleTitle = (e) => {
+    const next = e.target.value.replace(/[^A-Za-z ]/g, "").slice(0, 100);
+    setF({ ...f, title: next });
+  };
+
+  const itemizedTotal = React.useMemo(
+    () => (f.subItems || []).reduce((sum, it) => sum + toNumber(it.target), 0),
     [f.subItems]
   );
-  const targetRupees = f.mode === "single" ? Number(f.target || 0) : itemizedTotal;
+  const targetRupees = f.mode === "single" ? toNumber(f.target) : itemizedTotal;
   const targetCents = toCents(targetRupees);
 
   const selectedAcc = accounts.find((a) => a._id === f.primaryAccountId);
   const accBalCents = Number(selectedAcc?.balanceCents || 0);
-  const insufficientAccount = targetCents > accBalCents;
+  const accBalRupees = accBalCents / 100;
 
-  // Budget context for warnings (not blocking on create; blocking happens on FUND)
+  const singleCap = accBalRupees;
+  const capForRow = (index) => {
+    const others = (f.subItems || []).reduce(
+      (s, it, i) => (i === index ? s : s + toNumber(it.target)),
+      0
+    );
+    return Math.max(0, accBalRupees - others);
+  };
+
+  const insufficientAccount =
+    f.mode === "single"
+      ? targetCents > accBalCents
+      : toCents(itemizedTotal) > accBalCents;
+
   const capC = toCents(Number(budget?.events?.amount || 0));
   const usedC = Number(budget?._usedEventsCents || 0);
   const earmarkedC = Number(budget?._earmarkedEventsCents || 0);
@@ -362,7 +575,9 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
     if (!f.title?.trim()) return alert("Title is required");
     if (!f.dueDate) return alert("Due date is required");
     if (!f.primaryAccountId) return alert("Select an account");
-    if (insufficientAccount) return alert("Insufficient funds in the selected account to cover the event target.");
+    if (insufficientAccount)
+      return alert("Insufficient funds in the selected account to cover the event target.");
+
     const payload = {
       title: f.title.trim(),
       mode: f.mode,
@@ -375,18 +590,24 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
       },
       notes: f.notes?.trim() || "",
     };
+
     if (f.mode === "single") {
-      payload.targetCents = toCents(f.target);
-      payload.subItems = [];
+      payload.targetCents = toCents(toNumber(f.target) || 0);
     } else {
       const subItems = (f.subItems || []).filter((s) => s.name?.trim());
-      payload.subItems = subItems.map((s) => ({ name: s.name.trim(), targetCents: toCents(s.target || 0) }));
-      payload.targetCents = payload.subItems.reduce((a, b) => a + b.targetCents, 0);
+      payload.subItems = subItems.map((s) => {
+        const one = { name: s.name.trim(), targetCents: toCents(toNumber(s.target) || 0) };
+        if (s.id) one._id = s.id;
+        return one;
+      });
     }
 
     if (isEdit) await onSave(f._id, payload);
     else await onSave(null, payload);
   };
+
+  const minDate = toLocalYMD(new Date());
+  const maxDate = toLocalYMD(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
 
   return (
     <Modal open={open} onClose={onClose} title={isEdit ? "Edit Event" : "Add Event"} max="max-w-3xl">
@@ -396,9 +617,12 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.title}
-              onChange={(e) => setF({ ...f, title: e.target.value })}
-              placeholder="Sahan’s Wedding"
+              onChange={handleTitle}
+              placeholder="Sahan Wedding"
               required
+              maxLength={100}
+              pattern="^[A-Za-z ]{1,100}$"
+              title="Only letters and spaces, up to 100 characters"
             />
           </Field>
           <Field label="Mode" required>
@@ -445,10 +669,10 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
           </Field>
           <Field label="Currency">
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 bg-slate-50 text-slate-600"
               value={f.currency}
-              onChange={(e) => setF({ ...f, currency: e.target.value.toUpperCase() })}
-              placeholder="LKR"
+              readOnly
+              disabled
             />
           </Field>
           <Field label="Due date" required>
@@ -456,6 +680,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.dueDate}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setF({ ...f, dueDate: e.target.value })}
               required
             />
@@ -468,6 +694,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.startDate}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setF({ ...f, startDate: e.target.value })}
             />
           </Field>
@@ -476,6 +704,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.endDate}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setF({ ...f, endDate: e.target.value })}
             />
           </Field>
@@ -483,15 +713,12 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
 
         {f.mode === "single" ? (
           <Field label="Target amount" required>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            <MoneyInput
               value={f.target}
-              onChange={(e) => setF({ ...f, target: e.target.value })}
-              placeholder="15000.00"
-              required
+              onValue={(v) => setF({ ...f, target: v })}
+              cap={singleCap}
+              placeholder="150,000.00"
+              data-test="single-target"
             />
           </Field>
         ) : (
@@ -518,19 +745,19 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
                     setF({ ...f, subItems: x });
                   }}
                 />
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  className="col-span-4 rounded-xl border border-slate-300 px-3 py-2"
-                  placeholder="0.00"
-                  value={s.target}
-                  onChange={(e) => {
-                    const x = [...f.subItems];
-                    x[i].target = e.target.value;
-                    setF({ ...f, subItems: x });
-                  }}
-                />
+                <div className="col-span-4">
+                  <MoneyInput
+                    value={s.target}
+                    onValue={(v) => {
+                      const x = [...f.subItems];
+                      x[i].target = v;
+                      setF({ ...f, subItems: x });
+                    }}
+                    cap={capForRow(i)}
+                    placeholder="0.00"
+                    data-test={`sub-${i}-target`}
+                  />
+                </div>
                 <button
                   type="button"
                   className="col-span-1 rounded-xl border"
@@ -547,7 +774,6 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
           </div>
         )}
 
-        {/* Account balance guard (blocks Save) */}
         {selectedAcc && targetCents > 0 && targetCents > (selectedAcc.balanceCents || 0) && (
           <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2">
             Insufficient funds in <b>{selectedAcc.name}</b>. Needed {currency(targetCents, f.currency)}, available{" "}
@@ -555,7 +781,6 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
           </div>
         )}
 
-        {/* Budget warning (warn-only on create) */}
         {showBudgetWarn && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
             Heads up: This event’s target ({currency(targetCents, f.currency)}) exceeds your remaining Events budget for{" "}
@@ -577,9 +802,17 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
           <button
             type="submit"
             className={`px-4 py-2 rounded-xl text-white ${
-              insufficientAccount ? "bg-slate-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"
+              (f.mode === "single"
+                ? targetCents > accBalCents
+                : toCents(itemizedTotal) > accBalCents)
+                ? "bg-slate-400 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-700"
             }`}
-            disabled={insufficientAccount}
+            disabled={
+              f.mode === "single"
+                ? targetCents > accBalCents
+                : toCents(itemizedTotal) > accBalCents
+            }
           >
             Save
           </button>
@@ -592,14 +825,23 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
   );
 }
 
+
+// parse to number (safe for 2dp strings)
+const toNumberRupees = (s) => {
+  const raw = cleanAmount(s);
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+};
+
 /* ===================== Fund (enforces budget cap) ===================== */
 function FundModal({ open, onClose, onSave, accounts, event, budget }) {
-  const [accountId, setAccountId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(ymd(new Date()));
-  const [note, setNote] = useState("");
+  const [accountId, setAccountId] = React.useState("");
+  const [amount, setAmount] = React.useState(""); // RUPEES string with commas
+  const [date, setDate] = React.useState(ymd(new Date())); // keep your util for initial value
+  const [note, setNote] = React.useState("");
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
     setAmount("");
@@ -608,34 +850,49 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
   }, [open, event, accounts]);
 
   const selectedAcc = accounts.find((a) => a._id === accountId);
-  const amountCents = toCents(amount);
 
-  // Target remaining for this event
-  const remainingTargetCents = Math.max(0, (event?.targetCents || 0) - (event?.fundedCents || 0));
+  // amounts in CENTS for guards
+  const amountCents = toCents(toNumberRupees(amount));
+
+  const remainingTargetCents = Math.max(
+    0,
+    (event?.targetCents || 0) - (event?.fundedCents || 0)
+  );
+
   const insufficientAccount = (selectedAcc?.balanceCents || 0) < amountCents;
   const overEventTarget = amountCents > remainingTargetCents;
 
-  // Budget hard/soft cap check
+  // Budget hard/soft cap
   const capC = toCents(Number(budget?.events?.amount || 0));
   const usedC = Number(budget?._usedEventsCents || 0);
   const earmarkedC = Number(budget?._earmarkedEventsCents || 0);
   const remainingBudgetC = Math.max(0, capC - usedC - earmarkedC);
-
   const overBudget = amountCents > remainingBudgetC && capC > 0;
   const hardCap = !!budget?.events?.hardCap;
 
+  // live cap while typing (rupees): min(account, remaining target, (hard cap ? remaining budget : ∞))
   const maxAllowedByAccount = selectedAcc?.balanceCents || 0;
   const maxAllowedByEvent = remainingTargetCents;
   const maxAllowedByBudget = hardCap ? remainingBudgetC : Infinity;
-  const maxAllowed = Math.min(maxAllowedByAccount, maxAllowedByEvent, maxAllowedByBudget);
-  const maxAllowedRupees = (maxAllowed / 100).toFixed(2);
+  const maxAllowedCents = Math.min(maxAllowedByAccount, maxAllowedByEvent, maxAllowedByBudget);
+  const maxAllowedRupees = (maxAllowedCents / 100) || 0;
+
+  // date limits: today .. +30 days
+  const minDate = toLocalYMD(new Date());
+  const maxDate = toLocalYMD(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+  const disableSubmit =
+    amountCents <= 0 ||
+    insufficientAccount ||
+    overEventTarget ||
+    (hardCap && overBudget);
 
   return (
     <Modal open={open} onClose={onClose} title={`Fund: ${event?.title || ""}`}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (insufficientAccount || overEventTarget || (hardCap && overBudget)) return;
+          if (disableSubmit) return;
           await onSave({
             accountId,
             amountCents,
@@ -661,27 +918,31 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
         </Field>
 
         <div className="grid md:grid-cols-3 gap-4">
-          <Field label="Amount" required hint={`Max: ${currency(maxAllowed, event?.currency || "LKR")}`}>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max={maxAllowedRupees}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+          <Field
+            label="Amount"
+            required
+            hint={`Max: ${currency(maxAllowedCents, event?.currency || "LKR")}`}
+          >
+            <MoneyInput
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onValue={setAmount}
+              cap={maxAllowedRupees}
               placeholder="0.00"
-              required
             />
           </Field>
+
           <Field label="Date" required>
             <input
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={date}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setDate(e.target.value)}
+              required
             />
           </Field>
+
           <Field label="Note">
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -719,15 +980,19 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
           <button
             type="submit"
             className={`px-4 py-2 rounded-xl text-white ${
-              insufficientAccount || overEventTarget || (hardCap && overBudget)
+              disableSubmit
                 ? "bg-slate-400 cursor-not-allowed"
                 : "bg-emerald-600 hover:bg-emerald-700"
             }`}
-            disabled={insufficientAccount || overEventTarget || (hardCap && overBudget)}
+            disabled={disableSubmit}
           >
             Add Funds
           </button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-xl border border-slate-300"
+            onClick={onClose}
+          >
             Cancel
           </button>
         </div>
@@ -738,12 +1003,12 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
 
 /* ===================== Remove Funds (Defund) ===================== */
 function DefundModal({ open, onClose, onSave, accounts, event }) {
-  const [accountId, setAccountId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(ymd(new Date()));
-  const [note, setNote] = useState("");
+  const [accountId, setAccountId] = React.useState("");
+  const [amount, setAmount] = React.useState(""); // RUPEES string with commas
+  const [date, setDate] = React.useState(ymd(new Date())); // keep your existing util for initial
+  const [note, setNote] = React.useState("");
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
     setAmount("");
@@ -751,17 +1016,29 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
     setNote("");
   }, [open, event, accounts]);
 
+  // refundable = funded - spent
   const refundableCents = Math.max(0, (event?.fundedCents || 0) - (event?.spentCents || 0));
-  const amountCents = toCents(amount);
+  const refundableRupees = (refundableCents / 100) || 0;
+
+  // amount in cents from the formatted string
+  const amountCents = toCents(toNumberRupees(amount));
   const overRefundable = amountCents > refundableCents;
-  const maxRefundRupees = (refundableCents / 100).toFixed(2);
+
+  // limit selectable dates: today .. +30 days
+  const minDate = toLocalYMD(new Date());
+  const maxDate = toLocalYMD(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+  const disableSubmit =
+    refundableCents <= 0 ||
+    amountCents <= 0 ||
+    overRefundable;
 
   return (
     <Modal open={open} onClose={onClose} title={`Remove Funds: ${event?.title || ""}`}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (overRefundable || refundableCents <= 0) return;
+          if (disableSubmit) return;
           await onSave({
             accountId,
             amountCents,
@@ -787,27 +1064,32 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
         </Field>
 
         <div className="grid md:grid-cols-3 gap-4">
-          <Field label="Amount" required hint={`Refundable: ${currency(refundableCents, event?.currency || "LKR")}`}>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max={maxRefundRupees}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+          <Field
+            label="Amount"
+            required
+            hint={`Refundable: ${currency(refundableCents, event?.currency || "LKR")}`}
+          >
+            {/* cap while typing to refundable max; comma groups + 2dp via MoneyInput */}
+            <MoneyInput
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onValue={setAmount}
+              cap={refundableRupees}
               placeholder="0.00"
-              required
             />
           </Field>
+
           <Field label="Date" required>
             <input
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={date}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setDate(e.target.value)}
+              required
             />
           </Field>
+
           <Field label="Note">
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -820,7 +1102,13 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
 
         {overRefundable && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-            You can only remove up to what’s unspent. Refundable: {currency(refundableCents, event?.currency || "LKR")}.
+            You can only remove up to what’s unspent. Refundable:{" "}
+            {currency(refundableCents, event?.currency || "LKR")}.
+          </div>
+        )}
+        {refundableCents <= 0 && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 text-slate-600 text-sm px-3 py-2">
+            Nothing refundable for this event right now.
           </div>
         )}
 
@@ -828,13 +1116,19 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
           <button
             type="submit"
             className={`px-4 py-2 rounded-xl text-white ${
-              overRefundable || refundableCents <= 0 ? "bg-slate-400 cursor-not-allowed" : "bg-amber-600 hover:bg-amber-700"
+              disableSubmit
+                ? "bg-slate-400 cursor-not-allowed"
+                : "bg-amber-600 hover:bg-amber-700"
             }`}
-            disabled={overRefundable || refundableCents <= 0}
+            disabled={disableSubmit}
           >
             Remove Funds
           </button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-xl border border-slate-300"
+            onClick={onClose}
+          >
             Cancel
           </button>
         </div>
@@ -843,16 +1137,17 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
   );
 }
 
+
 /* ===================== Spend (blocks > funded - spent) ===================== */
 function SpendModal({ open, onClose, onSave, accounts, event }) {
-  const [accountId, setAccountId] = useState("");
-  const [subItemId, setSubItemId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [merchant, setMerchant] = useState("");
-  const [date, setDate] = useState(ymd(new Date()));
-  const [note, setNote] = useState("");
+  const [accountId, setAccountId] = React.useState("");
+  const [subItemId, setSubItemId] = React.useState("");
+  const [amount, setAmount] = React.useState(""); // RUPEES string with commas via MoneyInput
+  const [merchant, setMerchant] = React.useState("");
+  const [date, setDate] = React.useState(ymd(new Date())); // keep your util for initial value
+  const [note, setNote] = React.useState("");
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
     setSubItemId("");
@@ -862,21 +1157,33 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
     setNote("");
   }, [open, event, accounts]);
 
-  const remainingFundedCents = Math.max(0, (event?.fundedCents || 0) - (event?.spentCents || 0));
-  const amountCents = toCents(amount);
+  // how much is available to spend (funded - already spent)
+  const remainingFundedCents = Math.max(
+    0,
+    (event?.fundedCents || 0) - (event?.spentCents || 0)
+  );
+  const availableRupees = (remainingFundedCents / 100) || 0;
+
+  // numeric value from formatted input
+  const amountCents = toCents(toNumberRupees(amount));
   const overAvailable = amountCents > remainingFundedCents;
-  const maxSpendRupees = (remainingFundedCents / 100).toFixed(2);
+
+  // limit selectable dates: today .. +30 days
+  const minDate = toLocalYMD(new Date());
+  const maxDate = toLocalYMD(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+  const disableSubmit = amountCents <= 0 || overAvailable;
 
   return (
     <Modal open={open} onClose={onClose} title={`Spend for: ${event?.title || ""}`}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (overAvailable) return;
+          if (disableSubmit) return;
           await onSave({
             accountId,
             subItemId: subItemId || null,
-            amountCents: toCents(amount),
+            amountCents,
             merchant: merchant?.trim() || "",
             date: date ? new Date(date) : new Date(),
             note: note?.trim() || "",
@@ -899,6 +1206,7 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
               ))}
             </select>
           </Field>
+
           {event?.mode === "itemized" && (
             <Field label="Sub-item">
               <select
@@ -918,19 +1226,20 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
         </div>
 
         <div className="grid md:grid-cols-3 gap-4">
-          <Field label="Amount" required hint={`Available: ${currency(remainingFundedCents, event?.currency || "LKR")}`}>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max={maxSpendRupees}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+          <Field
+            label="Amount"
+            required
+            hint={`Available: ${currency(remainingFundedCents, event?.currency || "LKR")}`}
+          >
+            {/* live clamp to available balance; commas + 2dp via MoneyInput */}
+            <MoneyInput
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onValue={setAmount}
+              cap={availableRupees}
               placeholder="0.00"
-              required
             />
           </Field>
+
           <Field label="Merchant">
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -939,19 +1248,24 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
               placeholder="e.g., ODEL"
             />
           </Field>
+
           <Field label="Date" required>
             <input
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={date}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setDate(e.target.value)}
+              required
             />
           </Field>
         </div>
 
         {overAvailable && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-            You can’t spend more than what’s funded. Available: {currency(remainingFundedCents, event?.currency || "LKR")}.
+            You can’t spend more than what’s funded. Available:{" "}
+            {currency(remainingFundedCents, event?.currency || "LKR")}.
           </div>
         )}
 
@@ -959,13 +1273,17 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
           <button
             type="submit"
             className={`px-4 py-2 rounded-xl text-white ${
-              overAvailable ? "bg-slate-400 cursor-not-allowed" : "bg-rose-600 hover:bg-rose-700"
+              disableSubmit ? "bg-slate-400 cursor-not-allowed" : "bg-rose-600 hover:bg-rose-700"
             }`}
-            disabled={overAvailable}
+            disabled={disableSubmit}
           >
             Add Expense
           </button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-xl border border-slate-300"
+            onClick={onClose}
+          >
             Cancel
           </button>
         </div>
@@ -973,6 +1291,7 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
     </Modal>
   );
 }
+
 
 /* ===================== Event Card ===================== */
 function EventCard({ ev, onEdit, onFund, onDefund, onSpend, onDelete }) {

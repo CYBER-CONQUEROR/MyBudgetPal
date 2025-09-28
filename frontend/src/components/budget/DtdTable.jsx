@@ -1,5 +1,12 @@
 import React from "react";
-import { money } from "../../budget/utils"; // adjust if your utils path differs
+
+/**
+ * Format a number as currency (LKR with two decimal places)
+ */
+function money(amount) {
+  const n = Number(amount ?? 0);
+  return `LKR ${n.toFixed(2)}`;
+}
 
 /**
  * Props:
@@ -8,7 +15,7 @@ import { money } from "../../budget/utils"; // adjust if your utils path differs
  * - filter: string
  * - setFilter: fn
  * - onEditRow: fn(row)
- * - categoriesById?: { [id]: { name, ... } }  // optional, improves name fallback
+ * - categoriesById?: { [id]: { name, ... } }
  */
 export default function DtdTable({
   rows,
@@ -18,22 +25,19 @@ export default function DtdTable({
   onEditRow,
   categoriesById = {},
 }) {
+  const actualTotal = rows.reduce((sum, r) => sum + Number(r.actual || 0), 0);
+
   return (
-    <div className="card">
-      <div className="card-header">
-        <div className="flex items-center justify-between gap-3">
+    <div className="rounded-2xl border border-line/70 bg-white shadow-sm">
+      {/* Header */}
+      <div className="px-5 pt-3 pb-2">
+        <div className="flex items-center justify-between gap-3 pt-2">
           <h2 className="text-lg font-bold text-slate-800">DTD Category Budgets</h2>
 
           {/* Filter input — fixed width/height, icon centered */}
           <div className="relative w-56 sm:w-64">
-            <input
-              className="input pl-9 h-10 w-full"
-              placeholder="Filter by name..."
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
             <svg
-              className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+              className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 transform text-slate-400"
               viewBox="0 0 24 24"
               fill="none"
               aria-hidden="true"
@@ -44,21 +48,31 @@ export default function DtdTable({
                 strokeWidth="1.8"
               />
             </svg>
+
+            <input
+              type="text"
+              placeholder="Filter by name..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="h-10 w-full rounded-md border border-gray-300 bg-white pl-10 pr-3 text-sm focus:outline-none focus:ring-0"
+            />
           </div>
         </div>
       </div>
 
-      <div className="card-body">
+      {/* Body */}
+      <div className="px-5 pb-5">
         <div className="overflow-hidden rounded-xl border border-line/70">
           <table className="w-full text-sm">
-            <thead className="table-head">
+            <thead className="bg-slate-50 text-[13px] font-semibold text-slate-500">
               <tr>
-                <th className="text-left p-3">Category</th>
-                <th className="text-left p-3">Allocated Budget</th>
-                <th className="text-left p-3">Actual Spent Amount</th>
-                <th className="text-right p-3">Actions</th>
+                <th className="p-3 text-left">Category</th>
+                <th className="p-3 text-left">Allocated Budget</th>
+                <th className="p-3 text-left">Actual Spent Amount</th>
+                <th className="p-3 text-right">Actions</th>
               </tr>
             </thead>
+
             <tbody className="bg-white">
               {rows.map((r) => {
                 const displayName =
@@ -71,42 +85,32 @@ export default function DtdTable({
                   "Category";
 
                 return (
-                  <tr
-                    key={r.categoryId}
-                    className="border-t border-line/70 hover:bg-slate-50"
-                  >
+                  <tr key={r.categoryId} className="border-t border-line/70">
                     <td className="p-3">
                       <div className="flex items-center gap-2">
                         <span
-                          className="h-2 w-2 rounded-full shrink-0"
+                          className="h-2 w-2 shrink-0 rounded-full"
                           style={{ background: r.color }}
                         />
-                        <span className="text-slate-800 truncate">{displayName}</span>
+                        <span className="truncate text-slate-800">{displayName}</span>
                       </div>
                     </td>
                     <td className="p-3">{money(r.alloc)}</td>
                     <td className="p-3">{money(r.actual)}</td>
                     <td className="p-3 text-right">
                       <button
-                        className="p-2 rounded-lg hover:bg-slate-50"
+                        type="button"
                         title="Edit"
                         onClick={() => onEditRow(r)}
+                        className="rounded-lg p-2 focus:outline-none focus:ring-0"
                       >
-                        <svg
-                          className="h-4 w-4 text-slate-500"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                        >
+                        <svg className="h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none">
                           <path
                             d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Z"
                             stroke="currentColor"
                             strokeWidth="1.5"
                           />
-                          <path
-                            d="M14.06 6.19l3.75 3.75"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                          />
+                          <path d="M14.06 6.19l3.75 3.75" stroke="currentColor" strokeWidth="1.5" />
                         </svg>
                       </button>
                     </td>
@@ -114,12 +118,12 @@ export default function DtdTable({
                 );
               })}
 
-              <tr className="border-t">
-                <td className="p-3 font-semibold text-right" colSpan={2}>
-                  DTD Total
-                </td>
+              {/* Totals row */}
+              <tr className="border-t border-line/70">
+                <td className="p-3 text-right font-semibold">DTD Total</td>
                 <td className="p-3 font-extrabold">{money(total)}</td>
-                <td className="p-3" />
+                <td className="p-3 text-right font-semibold">Actual Total</td>
+                <td className="p-3 font-extrabold">{money(actualTotal)}</td>
               </tr>
             </tbody>
           </table>

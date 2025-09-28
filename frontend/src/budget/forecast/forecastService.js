@@ -75,7 +75,7 @@ async function arxTrainPredict(seriesRupees, periods, nextPeriod, useLog) {
     const Pk = periods.slice(0, k);
     const arx = buildARX(Pk, Sk);
     const model = makeLinear(arx.X.shape[1]);
-    await model.fit(arx.X, arx.Y, { epochs: 250, batchSize: Math.max(4, arx.X.shape[0]), verbose: 0 });
+    await model.fit(arx.X, arx.Y, { epochs: 30, batchSize: Math.max(4, arx.X.shape[0]), verbose: 0 });
     const xnext = arx.makeXnext(periods[k]);
     const yk = model.predict(xnext).dataSync()[0];
     arx.X.dispose(); arx.Y.dispose(); xnext.dispose(); model.dispose();
@@ -87,7 +87,7 @@ async function arxTrainPredict(seriesRupees, periods, nextPeriod, useLog) {
 
   const arxAll = buildARX(periods, S);
   const model = makeLinear(arxAll.X.shape[1]);
-  await model.fit(arxAll.X, arxAll.Y, { epochs: 300, batchSize: Math.max(4, arxAll.X.shape[0]), verbose: 0 });
+  await model.fit(arxAll.X, arxAll.Y, { epochs: 40, batchSize: Math.max(4, arxAll.X.shape[0]), verbose: 0 });
   const xNext = arxAll.makeXnext(nextPeriod);
   const yNext = model.predict(xNext).dataSync()[0];
   arxAll.X.dispose(); arxAll.Y.dispose(); xNext.dispose(); model.dispose();

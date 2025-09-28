@@ -239,6 +239,8 @@ const GoalRadial = ({ savedCents, targetCents }) => (
 /* ------------------------- Forms ------------------------- */
 function GoalForm({ open, onClose, onSave, initial }) {
   const [f, setF] = useState({ _id: null, name: "", target: "", deadline: "", priority: "medium" });
+  const [errors, setErrors] = useState({});  // NEW
+
   useEffect(() => {
     if (!open) return;
     if (initial) setF({
@@ -249,11 +251,23 @@ function GoalForm({ open, onClose, onSave, initial }) {
       priority: initial.priority || "medium",
     });
     else setF({ _id: null, name: "", target: "", deadline: "", priority: "medium" });
+    setErrors({}); // reset errors when opening
   }, [open, initial]);
+
+  const validate = () => {
+    const errs = {};
+    if (!f.name.trim()) errs.name = "Name is required.";
+    if (!f.target || Number(f.target) <= 0) errs.target = "Target must be greater than 0.";
+    return errs;
+  };
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!f.target) return alert("Please enter a target amount.");
+    const errs = validate();
+    if (Object.keys(errs).length) {
+      setErrors(errs);
+      return;
+    }
     const body = {
       name: f.name,
       targetCents: toCents(f.target),
@@ -268,31 +282,60 @@ function GoalForm({ open, onClose, onSave, initial }) {
     <Modal open={open} onClose={onClose} title={f._id ? "Edit Goal" : "Add Goal"}>
       <form onSubmit={submit} className="grid gap-4" noValidate>
         <Field label="Name" required>
-          <input className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.name} onChange={(e)=>setF({...f, name: e.target.value})} required />
+          <input
+            className={`w-full rounded-xl border px-3 py-2 ${errors.name ? "border-red-500" : "border-slate-300"}`}
+            value={f.name}
+            onChange={(e)=>setF({...f, name: e.target.value})}
+            required
+          />
+          {errors.name && <p className="text-xs text-red-500 mt-1">{errors.name}</p>}
         </Field>
+
         <div className="grid sm:grid-cols-3 gap-4">
           <Field label="Target (LKR)" required>
-            <MoneyInput value={f.target} onChange={(v)=>setF({...f, target: v})} required />
+            <MoneyInput
+              value={f.target}
+              onChange={(v)=>setF({...f, target: v})}
+              required
+            />
+            {errors.target && <p className="text-xs text-red-500 mt-1">{errors.target}</p>}
           </Field>
           <Field label="Deadline">
-            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.deadline} onChange={(e)=>setF({...f, deadline: e.target.value})} />
-          </Field>
+  <input
+    type="date"
+    className="w-full rounded-xl border border-slate-300 px-3 py-2"
+    value={f.deadline}
+    min={new Date().toISOString().split("T")[0]}  // ✅ freeze past dates
+    onChange={(e)=>setF({...f, deadline: e.target.value})}
+  />
+</Field>
+
           <Field label="Priority" required>
-            <select className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.priority} onChange={(e)=>setF({...f, priority: e.target.value})}>
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.priority}
+              onChange={(e)=>setF({...f, priority: e.target.value})}
+            >
               <option value="high">High</option>
               <option value="medium">Medium</option>
               <option value="low">Low</option>
             </select>
           </Field>
         </div>
+
         <div className="flex items-center gap-3 pt-2">
-          <button type="submit" className="px-4 py-2 rounded-xl text-white bg-indigo-600 hover:bg-indigo-700">Save</button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>Cancel</button>
+          <button type="submit" className="px-4 py-2 rounded-xl text-white bg-indigo-600 hover:bg-indigo-700">
+            Save
+          </button>
+          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+            Cancel
+          </button>
         </div>
       </form>
     </Modal>
   );
 }
+
 
 function FundForm({ open, onClose, onSubmit, accounts, goal, mode = "fund" }) {
   const [f, setF] = useState({ accountId: accounts[0]?._id || "", amount: "", note: "" });

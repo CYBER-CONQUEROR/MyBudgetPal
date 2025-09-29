@@ -541,7 +541,7 @@ export default function BudgetPlanPage() {
             {/* Header/actions */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
-                <h1 className="text-3xl font-extrabold text-slate-800">Budget Management</h1>
+                <h1 className="pb-3 text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">Budget Management</h1>
                 <p className="text-sm text-slate-500">
                   Manage your monthly budget and track your spending with ease.
                 </p>

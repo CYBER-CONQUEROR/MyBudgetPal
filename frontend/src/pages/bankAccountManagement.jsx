@@ -1,9 +1,18 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import {
   Plus, PencilLine, Archive, Search, Building2, ChevronDown, Trash2,
   ArrowRightLeft, ArrowDownCircle, ArrowUpCircle, Banknote, CreditCard, Wallet, Eye,
 } from "lucide-react";
 import api from "../api/api.js"; // axios instance with baseURL=/api and withCredentials:true
+
+/* ---------- helpers ---------- */
+const stripUndefined = (obj) =>
+  Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => v !== undefined));
+
+const fmtLKR = (cents) => {
+  const rupees = Number(cents || 0) / 100;
+  return `LKR ${rupees.toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState([]);
@@ -87,7 +96,7 @@ export default function AccountsPage() {
   const onView = async (acc) => {
     try {
       const { data } = await api.get(`accounts/${acc._id}`);
-      setDetails(data);
+      setDetails(data?.data ?? data);
     } catch (e) {
       alert(e?.response?.data?.message || e.message || "Failed to load details");
     }
@@ -95,10 +104,11 @@ export default function AccountsPage() {
 
   const handleSave = async (payload, id) => {
     try {
+      const body = stripUndefined(payload);
       if (id) {
-        await api.patch(`accounts/${id}`, payload);
+        await api.patch(`accounts/${id}`, body);
       } else {
-        await api.post("accounts", payload);
+        await api.post("accounts", body);
       }
       setModalOpen(false);
       setEditing(null);
@@ -135,6 +145,19 @@ export default function AccountsPage() {
       setToDelete(null);
       await load();
     } catch (e) {
+      const status = e?.response?.status;
+      if (status === 404 || status === 405 || status === 422) {
+        try {
+          await api.post(`accounts/${id}/delete`);
+          setConfirmDeleteOpen(false);
+          setToDelete(null);
+          await load();
+          return;
+        } catch (e2) {
+          alert(e2?.response?.data?.message || e2.message || "Delete failed");
+          return;
+        }
+      }
       alert(e?.response?.data?.message || e.message || "Delete failed");
     }
   };
@@ -142,7 +165,7 @@ export default function AccountsPage() {
   // Money movement
   const handleTransfer = async (fromId, toId, amountCents) => {
     try {
-      await api.post("accounts/transfer", { fromAccountId: fromId, toAccountId: toId, amountCents });
+      await api.post("accounts/transfer", stripUndefined({ fromAccountId: fromId, toAccountId: toId, amountCents }));
       await load();
     } catch (e) {
       alert(e?.response?.data?.message || e.message || "Transfer failed");
@@ -151,7 +174,7 @@ export default function AccountsPage() {
 
   const handleDeposit = async (bankId, amountCents) => {
     try {
-      await api.post(`accounts/${bankId}/deposit`, { amountCents });
+      await api.post(`accounts/${bankId}/deposit`, stripUndefined({ amountCents }));
       await load();
     } catch (e) {
       alert(e?.response?.data?.message || e.message || "Deposit failed (ensure Cash wallet exists)");
@@ -160,7 +183,7 @@ export default function AccountsPage() {
 
   const handleWithdraw = async (bankId, amountCents) => {
     try {
-      await api.post(`accounts/${bankId}/withdraw`, { amountCents });
+      await api.post(`accounts/${bankId}/withdraw`, stripUndefined({ amountCents }));
       await load();
     } catch (e) {
       alert(e?.response?.data?.message || e.message || "Withdraw failed (ensure Cash wallet exists)");
@@ -168,7 +191,7 @@ export default function AccountsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 text-slate-900">
+    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
       {/* Header */}
       <div className="max-w-6xl mx-auto px-4 md:px-6 py-8">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -213,7 +236,7 @@ export default function AccountsPage() {
               <select
                 value={typeFilter}
                 onChange={(e) => setTypeFilter(e.target.value)}
-                className="appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2 pr-8 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                className="appearance-none rounded-xl border border-slate-200 bg-white px-5 py-2 pr-8 focus:outline-none focus:ring-4 focus:ring-blue-200"
               >
                 <option>All Types</option>
                 <option value="bank">Bank</option>
@@ -334,12 +357,7 @@ export default function AccountsPage() {
   );
 }
 
-/* ---------- helpers ---------- */
-const fmtLKR = (cents) => {
-  const rupees = Number(cents || 0) / 100;
-  return `LKR ${rupees.toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-};
-
+/* ---------- UI bits ---------- */
 function Tag({ children }) {
   return (
     <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 border border-slate-200">
@@ -378,60 +396,133 @@ function StatusPill({ archived }) {
   );
 }
 
-/* ---------- cards & states ---------- */
+/* ---------- cards ---------- */
 function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete }) {
-  const { name, institution, numberMasked, currency = "LKR", type, archived, balanceCents, creditLimitCents } =
-    account || {};
+  const {
+    name,
+    institution,
+    numberMasked,
+    currency = "LKR",
+    type,
+    archived,
+    balanceCents,
+    creditLimitCents,
+  } = account || {};
+
   const isCash = type === "cash";
+  const balanceZero = Number(balanceCents || 0) === 0;
+
+  const deleteReason = !archived
+    ? "Archive the account first"
+    : isCash
+      ? "Cash wallet cannot be deleted"
+      : !balanceZero
+        ? "Balance must be 0 to delete"
+        : "";
+
+  const canDelete = archived && !isCash && balanceZero;
+
+  // subtle color accents by type
+  const typeAccent = {
+    bank: "from-blue-600/10 to-blue-500/5 ring-blue-200/60",
+    card: "from-fuchsia-600/10 to-fuchsia-500/5 ring-fuchsia-200/60",
+    cash: "from-emerald-600/10 to-emerald-500/5 ring-emerald-200/60",
+  }[type] || "from-slate-600/10 to-slate-500/5 ring-slate-200/60";
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 hover:shadow-md hover:-translate-y-[2px] transition">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-blue-50 text-blue-700 p-2 border border-blue-100">
-            <Building2 size={18} />
+    <div
+      className={`
+        group relative rounded-2xl border border-slate-200 bg-white/90 backdrop-blur
+        shadow-[0_1px_2px_rgba(0,0,0,.05)] hover:shadow-[0_10px_30px_rgba(2,6,23,.08)]
+        transition-all duration-300 hover:-translate-y-[3px] overflow-hidden
+      `}
+    >
+      {/* Accent top border */}
+      <div className={`h-1 w-full bg-gradient-to-r ${typeAccent}`} />
+
+      <div className="p-3">
+        {/* Header row */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            {/* Icon tile with soft gradient ring */}
+            <div
+              className={`
+                relative grid h-10 w-10 place-items-center rounded-xl
+                bg-gradient-to-br ${typeAccent}
+                ring-1 ${typeAccent.includes("ring-") ? typeAccent.split(" ").pop() : "ring-slate-200/60"}
+              `}
+            >
+              <div className="rounded-lg bg-white/80 p-2 shadow ring-1 ring-white/60">
+                <Building2 className="h-5 w-5 text-slate-700" />
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h3 className="truncate text-base font-semibold text-slate-900">
+                  {name || "Unnamed"}
+                </h3>
+                <StatusPill archived={archived} />
+              </div>
+
+              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[13px] text-slate-600">
+                <TypeChip type={type} />
+                {institution && <Tag>{institution}</Tag>}
+                <Tag>{currency}</Tag>
+                {numberMasked ? (
+                  <span className="ml-0.5 rounded-md bg-slate-50 px-1.5 py-0.5 font-medium tracking-widest text-slate-700 ring-1 ring-slate-200">
+                    {numberMasked}
+                  </span>
+                ) : (
+                  <span className="italic text-slate-400">No mask</span>
+                )}
+              </div>
+            </div>
           </div>
-          <div>
-            <div className="text-base font-semibold leading-tight">{name || "Unnamed"}</div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-600">
-              <TypeChip type={type} />
-              {institution && <Tag>{institution}</Tag>}
-              <Tag>{currency}</Tag>
-              {numberMasked ? (
-                <span className="tracking-widest">{numberMasked}</span>
-              ) : (
-                <span className="italic text-slate-400">No mask</span>
+        </div>
+
+        {/* Balance block */}
+        <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Current Balance
+              </div>
+              <div className="mt-1 text-2xl font-bold leading-tight text-slate-900">
+                {fmtLKR(balanceCents)}
+              </div>
+              {type === "card" && creditLimitCents != null && (
+                <div className="mt-1 text-xs text-slate-600">
+                  Credit limit{" "}
+                  <span className="font-medium">{fmtLKR(creditLimitCents)}</span>
+                </div>
               )}
             </div>
+
+            {/* Light badge on the right */}
+            <div className="hidden sm:block">
+              <div className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 shadow-sm">
+                {archived ? "Read-only" : "Active"}
+              </div>
+            </div>
           </div>
         </div>
-        <StatusPill archived={archived} />
-      </div>
 
-      <div className="mt-4 flex items-center justify-between">
-        <div>
-          <div className="text-xs text-slate-500">Current Balance</div>
-          <div className="text-lg font-semibold">{fmtLKR(balanceCents)}</div>
-          {type === "card" && creditLimitCents != null && (
-            <div className="mt-1 text-xs text-slate-600">
-              Credit Limit: <span className="font-medium">{fmtLKR(creditLimitCents)}</span>
-            </div>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Actions */}
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={onView}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:bg-slate-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[.99]"
           >
-            <Eye size={16} /> View
+            <Eye className="h-4 w-4" /> View
           </button>
 
           {!isCash && (
             <button
               onClick={onEdit}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:bg-slate-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[.99]"
             >
-              <PencilLine size={16} /> Edit
+              <PencilLine className="h-4 w-4" /> Edit
             </button>
           )}
 
@@ -439,29 +530,38 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
             !archived ? (
               <button
                 onClick={onArchive}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-700 shadow-sm transition hover:bg-rose-100 active:scale-[.99]"
               >
-                <Archive size={16} /> Archive
+                <Archive className="h-4 w-4" /> Archive
               </button>
             ) : (
               <>
                 <button
                   onClick={onUnarchive}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-emerald-700 hover:bg-emerald-50"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 active:scale-[.99]"
                 >
-                  <Archive size={16} /> Unarchive
+                  <Archive className="h-4 w-4" /> Unarchive
                 </button>
+
                 <button
-                  onClick={onDelete}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+                  onClick={canDelete ? onDelete : undefined}
+                  disabled={!canDelete}
+                  title={deleteReason}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium shadow-sm transition active:scale-[.99] ${canDelete
+                      ? "border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                      : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
+                    }`}
                 >
-                  <Trash2 size={16} /> Delete
+                  <Trash2 className="h-4 w-4" /> Delete
                 </button>
               </>
             )
           ) : null}
         </div>
       </div>
+
+      {/* Subtle hover highlight */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-indigo-500/[.04] to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
     </div>
   );
 }
@@ -510,7 +610,30 @@ function SkeletonGrid() {
 }
 
 /* ---------- Modals ---------- */
-/* ---------- Modals ---------- */
+
+// Utility: sanitize a money string (no commas) with support for typing a trailing dot.
+const sanitizeMoney = (raw, { keepTrailingDot = false } = {}) => {
+  if (raw == null) return "";
+  let v = String(raw).replace(/[^\d.]/g, "");
+  if (v === "") return "";
+  // keep first dot only
+  const firstDot = v.indexOf(".");
+  if (firstDot !== -1) v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, "");
+  // if starts with ".", prefix 0
+  if (v.startsWith(".")) v = "0" + v;
+  let [i = "", d = ""] = v.split(".");
+  // strip leading zeros but keep single 0
+  i = i.replace(/^0+(?=\d)/, "");
+  // clamp integer and decimals
+  if (i.length > 8) i = i.slice(0, 8);
+  if (d.length > 2) d = d.slice(0, 2);
+
+  // preserve trailing dot while typing (e.g., "12.")
+  const endsWithDot = v.endsWith(".");
+  if (endsWithDot && keepTrailingDot) return (i || "0") + ".";
+
+  return d.length ? `${i || "0"}.${d}` : (v.includes(".") ? (i || "0") + "." : (i || "0"));
+};
 
 // Create / Edit (create shows Opening Balance)
 function AccountFormModal({ banks, initial, onClose, onSave }) {
@@ -520,62 +643,141 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
   const [institution, setInstitution] = useState(initial?.institution || "");
   const [numberMasked, setNumberMasked] = useState(initial?.numberMasked || "");
   const [creditLimit, setCreditLimit] = useState(
-    initial?.creditLimitCents != null ? (initial.creditLimitCents / 100).toFixed(2) : ""
+    initial?.creditLimitCents != null ? (initial.creditLimitCents / 100).toString() : ""
   );
-  const [openingBalance, setOpeningBalance] = useState("0.00");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
 
+  const [openingBalance, setOpeningBalance] = useState("");
+  const openingRef = useRef(null);
+
+  const [nameErr, setNameErr] = useState("");
+  const [maskedErr, setMaskedErr] = useState("");
+  const [openingErr, setOpeningErr] = useState("");
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const NAME_ALLOWED = /^[A-Za-z ]+$/;
+  const MASKED_ALLOWED = /^[\d*]+$/;
+  const MAX_AMOUNT = 99999999.99;
+
+  const toCents = (s) => {
+    if (s === "" || s == null || s === ".") return 0;
+    const n = Number(s);
+    if (!Number.isFinite(n)) return null;
+    return Math.round(n * 100);
+  };
+
+  // Name (letters + spaces only)
+  const handleNameBeforeInput = (e) => { if (e.data == null) return; if (!/^[A-Za-z ]+$/.test(e.data)) e.preventDefault(); };
+  const handleNameKeyDown = (e) => {
+    const ok = ["Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Tab"];
+    if (ok.includes(e.key)) return;
+    if (!/^[A-Za-z ]$/.test(e.key)) e.preventDefault();
+  };
+  const handleNamePaste = (e) => {
+    const text = (e.clipboardData.getData("text") || "").replace(/[^A-Za-z ]+/g, "");
+    e.preventDefault();
+    const t = e.target, s = t.selectionStart ?? 0, en = t.selectionEnd ?? 0;
+    const next = (name.slice(0, s) + text + name.slice(en)).replace(/\s{2,}/g, " ");
+    setName(next);
+    setNameErr(next.trim() ? "" : "Name is required");
+  };
+  const onNameChange = (v) => { setName(v); setNameErr(v.trim() ? "" : "Name is required"); };
+
+  // Masked number (digits and * only, max 23 chars)
+  const onMaskedChange = (v) => {
+    if (v === "") { setNumberMasked(""); setMaskedErr(""); return; }
+    const raw = v.replace(/\s/g, "");
+    if (!MASKED_ALLOWED.test(raw)) {
+      const fixed = raw.replace(/[^0-9*]/g, "");
+      setNumberMasked(fixed.slice(0, 23));
+      setMaskedErr("Only digits and * are allowed");
+      return;
+    }
+    if (raw.length >= 24) {
+      setNumberMasked(raw.slice(0, 23));
+      setMaskedErr("Maximum length is 23 characters");
+      return;
+    }
+    setNumberMasked(raw);
+    setMaskedErr("");
+  };
+
+  // Opening balance (no commas; allow "0.", "12.", "12.3", "12.34")
+  const onOpeningChange = (e) => {
+    const hadTrailingDot = /\.$/.test(e.target.value);
+    const next = sanitizeMoney(e.target.value, { keepTrailingDot: hadTrailingDot });
+    setOpeningErr("");
+    setOpeningBalance(next);
+  };
+
+  const onOpeningBlur = () => {
+    const cents = toCents(openingBalance);
+    if (cents == null) return;
+    setOpeningBalance((cents / 100).toFixed(2));
+  };
+
+  // Credit limit (same behavior)
+  const onCreditLimitChange = (v) => {
+    const hadTrailingDot = /\.$/.test(v);
+    setCreditLimit(sanitizeMoney(v, { keepTrailingDot: hadTrailingDot }));
+  };
+
+  // Submit
   const submit = async (e) => {
     e.preventDefault();
     setErr("");
 
-    let cl = undefined;
+    if (!name.trim()) { setNameErr("Name is required"); return; }
+    if (!NAME_ALLOWED.test(name)) { setNameErr("Only letters and spaces are allowed"); return; }
+
+    if (numberMasked) {
+      if (!MASKED_ALLOWED.test(numberMasked)) { setMaskedErr("Only digits and * are allowed"); return; }
+      if (numberMasked.length > 23) { setMaskedErr("Maximum length is 23 characters"); return; }
+    }
+
+    let cl;
     if (type === "card") {
-      const raw = (creditLimit || "").toString().trim();
-      if (!raw && !isEdit) {
-        setErr("Credit limit is required for card accounts");
-        return;
-      }
+      const raw = (creditLimit || "").trim();
+      if (!raw && !isEdit) { setErr("Credit limit is required for card accounts"); return; }
       if (raw) {
         const cents = Math.round(Number(raw) * 100);
-        if (!Number.isFinite(cents) || cents < 0) {
-          setErr("Credit limit must be a non-negative number");
-          return;
-        }
+        if (!Number.isFinite(cents) || cents < 0) { setErr("Credit limit must be a non-negative number"); return; }
         cl = cents;
       }
     }
 
-    const payload = {
-      type,
-      name: name.trim(),
-      institution: institution || undefined,
-      numberMasked: numberMasked || undefined,
-      currency: "LKR",
-      ...(type === "card" ? { creditLimitCents: cl } : { creditLimitCents: undefined }),
-      ...(!isEdit
-        ? (() => {
-            const ob = Math.round(Number((openingBalance || "0").toString()) * 100);
-            if (!Number.isFinite(ob) || ob < 0) {
-              setErr("Opening balance must be a non-negative number");
-              return {};
-            }
-            return { openingBalanceCents: ob };
-          })()
-        : {}),
-    };
-
-    if (!payload.name) {
-      setErr("Name is required");
-      return;
+    let openingBalanceCents;
+    if (!isEdit) {
+      if ((openingBalance || "").startsWith(".")) { setOpeningErr("Amount cannot start with a decimal point"); return; }
+      const cents = toCents(openingBalance);
+      if (cents == null) { setOpeningErr("Invalid amount"); return; }
+      if (cents / 100 > MAX_AMOUNT) { setOpeningErr("Maximum is 99,999,999.99"); return; }
+      openingBalanceCents = cents;
     }
+
+    // build payload (do NOT send type/currency on edit to avoid 422)
+    const payload = isEdit
+      ? {
+          name: name.trim(),
+          institution: institution || undefined,
+          numberMasked: numberMasked || undefined,
+          ...(type === "card" ? { creditLimitCents: cl } : undefined),
+        }
+      : {
+          type,
+          name: name.trim(),
+          institution: institution || undefined,
+          numberMasked: numberMasked || undefined,
+          currency: "LKR",
+          ...(type === "card" ? { creditLimitCents: cl } : undefined),
+          openingBalanceCents,
+        };
 
     try {
       setSaving(true);
-      await onSave(payload, initial?._id);
-    } catch (e) {
-      setErr(e.message || "Save failed");
+      await onSave(stripUndefined(payload), initial?._id);
+    } catch (e2) {
+      setErr(e2?.response?.data?.message || e2?.message || "Save failed");
     } finally {
       setSaving(false);
     }
@@ -594,24 +796,30 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
               <select
                 value={type}
                 onChange={(e) => setType(e.target.value)}
-                disabled={isEdit} // type is immutable server-side
+                disabled={isEdit}
                 className="mt-1 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200 disabled:bg-slate-50"
               >
                 <option value="bank">Bank</option>
                 <option value="card">Card</option>
-                {/* No 'cash' option here */}
               </select>
             </div>
+
             <div>
               <label className="block text-sm font-medium text-slate-700">
                 Name<span className="text-rose-600"> *</span>
               </label>
               <input
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => onNameChange(e.target.value)}
+                onBeforeInput={handleNameBeforeInput}
+                onKeyDown={handleNameKeyDown}
+                onPaste={handleNamePaste}
                 placeholder={type === "card" ? "Visa Main" : "HNB Salary"}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                inputMode="text"
+                className={`mt-1 w-full rounded-xl border px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200 ${nameErr ? "border-rose-300" : "border-slate-200"
+                  }`}
               />
+              {nameErr && <p className="mt-1 text-xs text-rose-600">{nameErr}</p>}
             </div>
           </div>
 
@@ -625,21 +833,23 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
               >
                 <option value="">Select (optional)</option>
                 {banks.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
+                  <option key={b} value={b}>{b}</option>
                 ))}
               </select>
             </div>
+
             <div>
               <label className="block text-sm font-medium text-slate-700">Masked Number</label>
               <input
                 value={numberMasked}
-                onChange={(e) => setNumberMasked(e.target.value)}
+                onChange={(e) => onMaskedChange(e.target.value)}
                 placeholder="e.g., ****1234"
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                inputMode="numeric"
+                className={`mt-1 w-full rounded-xl border px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200 ${maskedErr ? "border-rose-300" : "border-slate-200"
+                  }`}
               />
               <p className="mt-1 text-xs text-slate-500">Only last digits. Never store full numbers.</p>
+              {maskedErr && <p className="mt-1 text-xs text-rose-600">{maskedErr}</p>}
             </div>
           </div>
 
@@ -647,11 +857,11 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
             <div>
               <label className="block text-sm font-medium text-slate-700">Credit Limit (LKR)</label>
               <input
-                type="number"
-                min="0"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 value={creditLimit}
-                onChange={(e) => setCreditLimit(e.target.value)}
+                onChange={(e) => onCreditLimitChange(e.target.value)}
+                placeholder="0.00"
                 className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
               />
             </div>
@@ -661,17 +871,20 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
             <div>
               <label className="block text-sm font-medium text-slate-700">Opening Balance (LKR)</label>
               <input
-                type="number"
-                min="0"
-                step="0.01"
+                ref={openingRef}
+                type="text"
+                inputMode="decimal"
                 value={openingBalance}
-                onChange={(e) => setOpeningBalance(e.target.value)}
+                onChange={onOpeningChange}
+                onBlur={onOpeningBlur}
                 placeholder="0.00"
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                className={`mt-1 w-full rounded-xl border px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200 ${openingErr ? "border-rose-300" : "border-slate-200"
+                  }`}
               />
               <p className="mt-1 text-xs text-slate-500">
-                Server stores cents; current balance initializes to this value.
+                Up to 2 decimals · Max 99,999,999.99 · can’t start with “.”
               </p>
+              {openingErr && <p className="mt-1 text-xs text-rose-600">{openingErr}</p>}
             </div>
           )}
 
@@ -702,7 +915,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
             </button>
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || !!nameErr || !!maskedErr || !!openingErr}
               className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-white hover:opacity-95 disabled:opacity-70"
             >
               {saving ? "Saving..." : isEdit ? "Save Changes" : "Create Account"}
@@ -741,48 +954,107 @@ function ConfirmDialog({ title, message, confirmLabel = "Confirm", variant = "pr
   );
 }
 
-// Transfer / Deposit / Withdraw
+/* ---------- Money actions ---------- */
 function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState(""); // plain string, supports "12.", "0.5", etc.
   const [err, setErr] = useState("");
 
-  const active = accounts.filter((a) => !a.archived);
-  const banks = active.filter((a) => a.type === "bank");
+  const active = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
+  const banks = useMemo(() => active.filter((a) => a.type === "bank"), [active]);
+  const cashAcc = useMemo(() => active.find((a) => a.type === "cash"), [active]);
+  const nonCash = useMemo(() => active.filter((a) => a.type !== "cash"), [active]);
+
   const titleMap = {
     transfer: "Transfer between accounts",
     deposit: "Deposit (Cash → Bank)",
     withdraw: "Withdraw (Bank → Cash)",
   };
 
+  // balances
+  const balCentsOf = (a) => {
+    if (!a) return 0;
+    const c = a.currentBalanceCents ?? a.balanceCents ?? 0;
+    return Number.isFinite(c) ? c : 0;
+  };
+  const money = (cents) =>
+    `LKR ${((cents ?? 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const byId = useMemo(() => Object.fromEntries(active.map(a => [a._id, a])), [active]);
+  const fromAcc = byId[fromId];
+  const toAcc = byId[toId];
+
+  const MAX_AMOUNT = 99999999.99;
+  const toCents = (str) => {
+    if (!str || str === ".") return null;
+    const n = Number(str);
+    if (!Number.isFinite(n)) return null;
+    return Math.round(n * 100);
+  };
+
+  const onAmountChange = (e) => {
+    const hadTrailingDot = /\.$/.test(e.target.value);
+    const next = sanitizeMoney(e.target.value, { keepTrailingDot: hadTrailingDot });
+    setErr("");
+    setAmount(next);
+  };
+
+  // available logic
+  const availableCents = useMemo(() => {
+    if (type === "transfer") return balCentsOf(fromAcc);
+    if (type === "deposit") return balCentsOf(cashAcc);
+    if (type === "withdraw") return balCentsOf(toAcc);
+    return 0;
+  }, [type, fromAcc, toAcc, cashAcc]);
+
+  const availableLabel = type === "deposit" ? "Cash available" : type === "withdraw" ? "Bank available" : "From account available";
+
   const submit = (e) => {
     e.preventDefault();
-    const cents = Math.round(Number((amount || "0").toString()) * 100);
-    if (!Number.isFinite(cents) || cents <= 0) return setErr("Enter a valid amount");
+    setErr("");
+
+    const cents = toCents(amount);
+    if (!Number.isFinite(cents) || cents <= 0) { setErr("Enter a valid amount"); return; }
+    if (cents / 100 > MAX_AMOUNT) { setErr("Amount exceeds limit"); return; }
+    if (cents > availableCents) { setErr("Amount exceeds available balance"); return; }
 
     if (type === "transfer") {
-      if (!fromId || !toId || fromId === toId) return setErr("Pick two different accounts");
-      setErr("");
+      if (!fromId || !toId || fromId === toId) { setErr("Pick two different non-cash accounts"); return; }
+      if (fromAcc?.type === "cash" || toAcc?.type === "cash") {
+        setErr("Use Deposit/Withdraw to move money to/from Cash wallet"); return;
+      }
       onConfirm(fromId, toId, cents);
       onClose();
       return;
     }
     if (type === "deposit") {
-      if (!toId) return setErr("Pick a bank account to deposit into");
-      setErr("");
+      if (!cashAcc) { setErr("Cash wallet not found"); return; }
+      if (!toId) { setErr("Pick a bank account to deposit into"); return; }
       onConfirm(toId, cents);
       onClose();
       return;
     }
     if (type === "withdraw") {
-      if (!toId) return setErr("Pick the bank account to withdraw from");
-      setErr("");
+      if (!toId) { setErr("Pick the bank account to withdraw from"); return; }
       onConfirm(toId, cents);
       onClose();
       return;
     }
   };
+
+  const confirmDisabled = (() => {
+    const cents = toCents(amount) ?? 0;
+    if (cents <= 0) return true;
+    if (cents > availableCents) return true;
+    if (type === "transfer") {
+      if (!fromId || !toId || fromId === toId) return true;
+      if (fromAcc?.type === "cash" || toAcc?.type === "cash") return true;
+    }
+    if (type === "deposit") { if (!toId || !cashAcc) return true; }
+    if (type === "withdraw") { if (!toId) return true; }
+    return false;
+  })();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -801,12 +1073,17 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
                   className="w-full rounded-xl border border-slate-200 p-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
                 >
                   <option value="">Select</option>
-                  {active.map((a) => (
+                  {nonCash.map((a) => (
                     <option key={a._id} value={a._id}>
                       {a.name}
                     </option>
                   ))}
                 </select>
+                {fromAcc && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    {availableLabel}: <span className="font-medium">{money(balCentsOf(fromAcc))}</span>
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-sm mb-1">To account</label>
@@ -816,13 +1093,14 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
                   className="w-full rounded-xl border border-slate-200 p-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
                 >
                   <option value="">Select</option>
-                  {active.map((a) => (
+                  {nonCash.map((a) => (
                     <option key={a._id} value={a._id}>
                       {a.name}
                     </option>
                   ))}
                 </select>
               </div>
+              <p className="text-xs text-slate-500 -mt-1">Use <b>Deposit/Withdraw</b> to move money to/from Cash wallet.</p>
             </>
           )}
 
@@ -841,9 +1119,12 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-slate-500 mt-1">
-                Moves money from your Cash wallet into this bank.
-              </p>
+              <div className="flex items-center justify-between mt-1">
+                <p className="text-xs text-slate-500">Moves money from your Cash wallet into this bank.</p>
+                <p className="text-xs text-slate-600">
+                  Cash available: <span className="font-medium">{money(balCentsOf(cashAcc))}</span>
+                </p>
+              </div>
             </div>
           )}
 
@@ -862,23 +1143,32 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-slate-500 mt-1">
-                Moves money from this bank into your Cash wallet.
-              </p>
+              {toAcc && (
+                <div className="flex items-center justify-between mt-1">
+                  <p className="text-xs text-slate-500">Moves money from this bank into your Cash wallet.</p>
+                  <p className="text-xs text-slate-600">
+                    Bank available: <span className="font-medium">{money(balCentsOf(toAcc))}</span>
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
           <div>
             <label className="block text-sm mb-1">Amount (LKR)</label>
             <input
-              type="number"
-              min="0"
-              step="0.01"
+              type="text"
+              inputMode="decimal"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={onAmountChange}
               placeholder="0.00"
               className="w-full rounded-xl border border-slate-200 p-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
             />
+            {availableCents > 0 && (
+              <p className="text-xs text-slate-500 mt-1">
+                Max allowed: <span className="font-medium">{money(availableCents)}</span>
+              </p>
+            )}
           </div>
 
           {err && <div className="text-sm text-rose-600">{err}</div>}
@@ -893,6 +1183,7 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
             </button>
             <button
               type="submit"
+              disabled={confirmDisabled}
               className="rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 hover:opacity-95"
             >
               Confirm

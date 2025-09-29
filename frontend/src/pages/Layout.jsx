@@ -153,10 +153,7 @@ export default function Layout() {
             >
               <MenuIcon fontSize="small" />
             </button>
-            <div className="hidden md:flex items-center gap-2">
-              <span className="inline-block h-5 w-5 rounded bg-indigo-600" />
-              <span className="text-sm font-bold text-slate-900">My Budget Pal</span>
-            </div>
+            
           </div>
           {/* right: name + avatar */}
           <div className="flex items-center gap-3">
@@ -182,7 +179,7 @@ export default function Layout() {
         </header>
 
         {/* content area scrolls only */}
-        <main className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
+        <main className="bg-gradient-to-b from-white to-slate-50 flex-1 overflow-y-auto px-4 py-6 md:px-8">
           <Outlet />
         </main>
       </div>

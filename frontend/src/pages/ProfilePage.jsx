@@ -116,8 +116,16 @@ export default function ProfilePage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
+      <div className="mx-8">
+      <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">
+              Profile
+            </h1>
+            <p className="text-slate-600 mt-1">
+              Manage your account info and avatar.
+            </p>
+          </div>
         <div className="flex items-center gap-4">
           <div className="relative">
             <img
@@ -130,10 +138,6 @@ export default function ProfilePage() {
               <CameraIcon fontSize="small" />
               <input type="file" accept="image/*" onChange={onPickAvatar} className="hidden" />
             </label>
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">Your Profile</h1>
-            <p className="text-slate-600">Manage your account info and avatar.</p>
           </div>
         </div>
 

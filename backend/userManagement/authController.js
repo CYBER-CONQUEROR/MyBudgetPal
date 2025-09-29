@@ -1,7 +1,7 @@
 // controllers/authController.js
 import User from "../userManagement/User.js";
 import jwt from "jsonwebtoken";
-
+import Account from "../AccountManagement/AccountModel.js";
 /* Helper: strip secrets/binary from user */
 const sanitize = (u) => {
   if (!u) return null;
@@ -43,6 +43,7 @@ export const register = async (req, res) => {
       }
     }
 
+    // create user
     const user = new User({ fullName, email: emailLc, phone: phone || undefined });
     await user.setPassword(password);
 
@@ -55,7 +56,19 @@ export const register = async (req, res) => {
     }
 
     await user.save();
-    return res.status(201).json({ ok: true, user: sanitize(user) });
+
+    // create default cash account
+    const cashAccount = new Account({
+      userId: user._id,
+      type: "cash",
+      name: "Cash Wallet",
+      currency: "LKR",
+      openingBalanceCents: 0,
+      balanceCents: 0,
+    });
+    await cashAccount.save();
+
+    return res.status(201).json({ ok: true, user: sanitize(user), defaultAccount: cashAccount });
   } catch (err) {
     console.error("REGISTER_ERROR", err);
     return res.status(500).json({ ok: false, message: "Registration failed", error: err.message });

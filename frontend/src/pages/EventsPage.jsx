@@ -1,5 +1,16 @@
 // src/pages/EventsPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import {
+  CalendarDays,
+  Target,
+  PiggyBank,
+  ShoppingCart,
+  Undo2,
+  Pencil,
+  Trash2,
+  PlusCircle,
+  MinusCircle,
+} from "lucide-react";
 import api from "../api/api.js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -173,7 +184,7 @@ async function generateEventExpensesReportPDF({
       doc.addImage(logoData, "PNG", margin, margin - 4, 44, 44);
       textX = margin + 56;
     }
-  } catch (_) {}
+  } catch (_) { }
   doc.setFont("helvetica", "bold").setFontSize(20).text("My Budget Pal", textX, margin + 12);
   doc.setFont("helvetica", "normal").setFontSize(16).text("Event Expenses Report", textX, margin + 34);
 
@@ -325,14 +336,63 @@ async function generateEventExpensesReportPDF({
 }
 
 /* ===================== PROGRESS BARS ===================== */
-function Bar({ value, max, hard = false }) {
-  const pct = max > 0 ? value / max : 0;
-  const w = `${clamp01(pct) * 100}%`;
-  const color = pct <= 0.85 ? "bg-emerald-500" : pct <= 1 ? "bg-amber-500" : "bg-rose-500";
-  const ring = hard && pct > 1 ? "ring-2 ring-rose-400" : "";
+function Bar({ value = 0, max = 0, hard = false }) {
+  const pctRaw = max > 0 ? value / max : 0;
+  const pct = Math.max(0, Math.min(1, pctRaw)); // clamp 0–100%
+
+  const [w, setW] = React.useState(0);
+
+  // Animate from 0 → target whenever value/max changes
+  React.useEffect(() => {
+    setW(0);
+    const id = requestAnimationFrame(() => setW(pct));
+    return () => cancelAnimationFrame(id);
+  }, [pct]);
+
+  const over = pctRaw > 1;
+  const warn = !over && pctRaw >= 0.85;
+
+  // choose fill color
+  const fill =
+    over ? "from-rose-500 to-rose-400"
+    : warn ? "from-amber-500 to-amber-400"
+    : "from-emerald-500 to-emerald-400";
+
   return (
-    <div className={`h-2 w-full rounded-full bg-slate-200 overflow-hidden ${ring}`}>
-      <div className={`h-full ${color}`} style={{ width: w }} />
+    <div
+      className={[
+        "relative h-2 w-full rounded-full bg-slate-200/80 overflow-hidden",
+        hard && over ? "ring-2 ring-rose-400" : "",
+      ].join(" ")}
+      role="progressbar"
+      aria-valuenow={Math.round(pct * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      {/* fill */}
+      <div
+        className={[
+          "h-full rounded-full bg-gradient-to-r",
+          "transition-[width] duration-700 ease-out",
+          "motion-reduce:transition-none",
+          fill,
+        ].join(" ")}
+        style={{ width: `${w * 100}%` }}
+        aria-hidden
+      />
+
+      {/* optional subtle hatch when hard cap */}
+      {hard && (
+        <div
+          className="pointer-events-none absolute inset-0 rounded-full"
+          aria-hidden
+          style={{
+            background:
+              "repeating-linear-gradient(45deg, transparent 0 8px, rgba(255,255,255,.45) 8px 16px)",
+            mixBlendMode: "overlay",
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -523,10 +583,10 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
         subItems:
           (initial.mode || "single") === "itemized"
             ? (initial.subItems || []).map((s) => ({
-                id: s._id,
-                name: s.name,
-                target: formatCommas((Number(fromCents(s.targetCents || 0)) || 0).toFixed(2)),
-              }))
+              id: s._id,
+              name: s.name,
+              target: formatCommas((Number(fromCents(s.targetCents || 0)) || 0).toFixed(2)),
+            }))
             : [{ name: "Gift", target: "" }],
       });
     } else {
@@ -632,9 +692,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
                   key={m}
                   type="button"
                   onClick={() => setF({ ...f, mode: m })}
-                  className={`px-3 py-2 rounded-xl border ${
-                    f.mode === m ? "bg-indigo-600 text-white border-indigo-600" : "bg-white"
-                  }`}
+                  className={`px-3 py-2 rounded-xl border ${f.mode === m ? "bg-indigo-600 text-white border-indigo-600" : "bg-white"
+                    }`}
                 >
                   {m === "single" ? "Single amount" : "Itemized"}
                 </button>
@@ -801,13 +860,12 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            className={`px-4 py-2 rounded-xl text-white ${
-              (f.mode === "single"
-                ? targetCents > accBalCents
-                : toCents(itemizedTotal) > accBalCents)
-                ? "bg-slate-400 cursor-not-allowed"
-                : "bg-indigo-600 hover:bg-indigo-700"
-            }`}
+            className={`px-4 py-2 rounded-xl text-white ${(f.mode === "single"
+              ? targetCents > accBalCents
+              : toCents(itemizedTotal) > accBalCents)
+              ? "bg-slate-400 cursor-not-allowed"
+              : "bg-indigo-600 hover:bg-indigo-700"
+              }`}
             disabled={
               f.mode === "single"
                 ? targetCents > accBalCents
@@ -979,11 +1037,10 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            className={`px-4 py-2 rounded-xl text-white ${
-              disableSubmit
-                ? "bg-slate-400 cursor-not-allowed"
-                : "bg-emerald-600 hover:bg-emerald-700"
-            }`}
+            className={`px-4 py-2 rounded-xl text-white ${disableSubmit
+              ? "bg-slate-400 cursor-not-allowed"
+              : "bg-emerald-600 hover:bg-emerald-700"
+              }`}
             disabled={disableSubmit}
           >
             Add Funds
@@ -1115,11 +1172,10 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            className={`px-4 py-2 rounded-xl text-white ${
-              disableSubmit
-                ? "bg-slate-400 cursor-not-allowed"
-                : "bg-amber-600 hover:bg-amber-700"
-            }`}
+            className={`px-4 py-2 rounded-xl text-white ${disableSubmit
+              ? "bg-slate-400 cursor-not-allowed"
+              : "bg-amber-600 hover:bg-amber-700"
+              }`}
             disabled={disableSubmit}
           >
             Remove Funds
@@ -1272,9 +1328,8 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            className={`px-4 py-2 rounded-xl text-white ${
-              disableSubmit ? "bg-slate-400 cursor-not-allowed" : "bg-rose-600 hover:bg-rose-700"
-            }`}
+            className={`px-4 py-2 rounded-xl text-white ${disableSubmit ? "bg-slate-400 cursor-not-allowed" : "bg-rose-600 hover:bg-rose-700"
+              }`}
             disabled={disableSubmit}
           >
             Add Expense
@@ -1295,43 +1350,56 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
 
 /* ===================== Event Card ===================== */
 function EventCard({ ev, onEdit, onFund, onDefund, onSpend, onDelete }) {
-  const fundedPct = (ev.targetCents || 0) > 0 ? Math.round(((ev.fundedCents || 0) / ev.targetCents) * 100) : 0;
-  const spentPct = (ev.targetCents || 0) > 0 ? Math.round(((ev.spentCents || 0) / ev.targetCents) * 100) : 0;
+  const fundedPct = (ev.targetCents || 0) > 0
+    ? Math.round(((ev.fundedCents || 0) / ev.targetCents) * 100)
+    : 0;
+  const spentPct = (ev.targetCents || 0) > 0
+    ? Math.round(((ev.spentCents || 0) / ev.targetCents) * 100)
+    : 0;
 
-  const hasSpend = (ev.spentCents || 0) > 0;
   const refundableCents = Math.max(0, (ev.fundedCents || 0) - (ev.spentCents || 0));
   const canDefund = refundableCents > 0;
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between mb-2">
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md transition">
+      {/* Title + Target */}
+      <div className="flex items-start justify-between mb-3">
         <div>
-          <div className="text-lg font-semibold">{ev.title}</div>
-          <div className="text-xs text-slate-500">
-            {ev.mode === "single" ? "Single amount" : "Itemized"} •{" "}
-            {ev?.dates?.due ? `Due ${new Date(ev.dates.due).toLocaleDateString()}` : "No due date"}
+          <div className="text-lg font-semibold text-slate-900">{ev.title}</div>
+          <div className="text-xs text-slate-500 mt-1">
+            {ev.mode === "single" ? "Single amount" : "Itemized"}
+          </div>
+          <div className="text-xs text-slate-500 flex items-center gap-1 mt-1">
+            <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+            {ev?.dates?.due
+              ? `Due ${new Date(ev.dates.due).toLocaleDateString()}`
+              : "No due date"}
           </div>
         </div>
         <div className="text-right">
           <div className="text-xs text-slate-500">Target</div>
-          <div className="font-semibold">{currency(ev.targetCents, ev.currency || "LKR")}</div>
+          <div className="font-semibold text-slate-900">
+            {currency(ev.targetCents, ev.currency || "LKR")}
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-2">
+      {/* Progress bars */}
+      <div className="space-y-4">
         <div>
-          <div className="flex justify-between text-xs">
+          <div className="flex justify-between text-xs mb-1 text-slate-600">
             <span>Funded</span>
-            <span>
+            <span className="font-medium text-slate-800">
               {currency(ev.fundedCents, ev.currency)} • {fundedPct}%
             </span>
           </div>
           <Bar value={ev.fundedCents || 0} max={ev.targetCents || 1} />
         </div>
+
         <div>
-          <div className="flex justify-between text-xs">
+          <div className="flex justify-between text-xs mb-1 text-slate-600">
             <span>Spent</span>
-            <span>
+            <span className="font-medium text-slate-800">
               {currency(ev.spentCents, ev.currency)} • {spentPct}%
             </span>
           </div>
@@ -1339,31 +1407,45 @@ function EventCard({ ev, onEdit, onFund, onDefund, onSpend, onDelete }) {
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white" onClick={() => onFund(ev)}>
+      {/* Actions */}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {/* Primary */}
+        <button
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700"
+          onClick={() => onFund(ev)}
+        >
           + Fund
         </button>
+        <button
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 text-white hover:bg-rose-700"
+          onClick={() => onSpend(ev)}
+        >
+          + Spend
+        </button>
+
+        {/* Secondary */}
         {canDefund && (
-          <button className="px-3 py-1.5 rounded-xl bg-amber-600 text-white" onClick={() => onDefund(ev)}>
+          <button
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-300 text-amber-700 hover:bg-amber-50"
+            onClick={() => onDefund(ev)}
+          >
             Remove Funds
           </button>
         )}
-        <button className="px-3 py-1.5 rounded-xl bg-rose-600 text-white" onClick={() => onSpend(ev)}>
-          + Spend
-        </button>
-        <button className="px-3 py-1.5 rounded-xl border" onClick={() => onEdit(ev)}>
+        <button
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border hover:bg-slate-50"
+          onClick={() => onEdit(ev)}
+        >
           Edit
         </button>
-
-        {/* Delete: hide if any spend; disable if funded > 0 */}
         {(ev.spentCents || 0) === 0 && (
           <button
-            className={`px-3 py-1.5 rounded-xl border ${
-              ev.fundedCents > 0 ? "border-slate-300 text-slate-400 cursor-not-allowed" : "border-red-300 text-red-600"
-            }`}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border ${ev.fundedCents > 0
+                ? "border-slate-300 text-slate-400 cursor-not-allowed"
+                : "border-red-300 text-red-600 hover:bg-red-50"
+              }`}
             onClick={() => (ev.fundedCents > 0 ? null : onDelete(ev))}
             disabled={ev.fundedCents > 0}
-            title={ev.fundedCents > 0 ? "Remove funds first to delete" : "Delete"}
           >
             Delete
           </button>
@@ -1572,14 +1654,14 @@ export default function EventsPage() {
   }, [scopedByMonth, filters]);
 
   return (
-    <div className="min-h-screen bg-slate-50 py-8">
+    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
       <div className="mx-auto max-w-6xl px-4">
         {/* Header with Month Scope */}
         <header className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Events</h1>
-            <p className="text-slate-500 text-sm">
-              Scoped to <b>{viewPeriod}</b> by <b>Created Month</b>. Events created in other months won’t count here.
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">Events</h1>
+            <p className="text-slate-600 mt-1">
+              Create Upcomming Events And Get Ready Without Financial Fear.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1595,10 +1677,11 @@ export default function EventsPage() {
                 This Month
               </button>
             </div>
-            <button className="px-3 py-2 rounded-xl border" onClick={load}>
+            <button className="px-3 py-2.5 rounded-xl border" onClick={load}>
               Refresh
             </button>
             <button
+            
               onClick={() =>
                 generateEventExpensesReportPDF({
                   rows: filtered,
@@ -1607,7 +1690,7 @@ export default function EventsPage() {
                   logoUrl: "/reportLogo.png",
                 })
               }
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50 shadow-sm"
+              className=" rounded-xl border border-slate-400 bg-white px-4 py-2.5 text-sm hover:bg-slate-50 shadow-sm"
             >
               Generate Report
             </button>
@@ -1761,9 +1844,9 @@ export default function EventsPage() {
         </div>
 
         {/* Table */}
-        <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600">
+            <thead className="bg-slate-200 text-slate-900">
               <tr>
                 <th className="px-3 py-2 text-left">Title</th>
                 <th className="px-3 py-2 text-left">Mode</th>
@@ -1776,10 +1859,11 @@ export default function EventsPage() {
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
+
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-slate-500">
+                  <td colSpan={9} className="px-3 py-6 text-center text-slate-500 italic">
                     No events
                   </td>
                 </tr>
@@ -1788,52 +1872,106 @@ export default function EventsPage() {
                   const hasSpend = (e.spentCents || 0) > 0;
                   const refundable = Math.max(0, (e.fundedCents || 0) - (e.spentCents || 0)) > 0;
                   const canDelete = !hasSpend && (e.fundedCents || 0) === 0;
+
+                  const accountName = accounts.find((a) => a._id === e.primaryAccountId)?.name || "—";
+                  const modePill =
+                    e.mode === "single"
+                      ? "bg-slate-100 text-slate-700"
+                      : "bg-indigo-50 text-indigo-700";
+
                   return (
-                    <tr key={e._id} className="border-t">
-                      <td className="px-3 py-2">{e.title}</td>
-                      <td className="px-3 py-2">{e.mode}</td>
-                      <td className="px-3 py-2">{accounts.find((a) => a._id === e.primaryAccountId)?.name || "—"}</td>
-                      <td className="px-3 py-2 text-right">
+                    <tr
+                      key={e._id}
+                      className="border-t hover:bg-slate-50 transition-colors"
+                    >
+                      <td className="px-3 py-2 font-medium text-slate-800">{e.title}</td>
+
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs ${modePill}`}>
+                          {e.mode === "single" ? "Single" : "Itemized"}
+                        </span>
+                      </td>
+
+                      <td className="px-3 py-2">{accountName}</td>
+
+                      <td className="px-3 py-2 text-right font-semibold">
                         {currency(e.targetCents, e.currency || "LKR")}
                       </td>
+
                       <td className="px-3 py-2 text-right">
                         {currency(e.fundedCents, e.currency || "LKR")}
                       </td>
-                      <td className="px-3 py-2 text-right">{currency(e.spentCents, e.currency || "LKR")}</td>
-                      <td className="px-3 py-2">
-                        {e?.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—"}
+
+                      <td className="px-3 py-2 text-right">
+                        {currency(e.spentCents, e.currency || "LKR")}
                       </td>
+
                       <td className="px-3 py-2">
-                        {e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—"}
+                        {e?.createdAt ? (
+                          <span className="inline-flex items-center gap-1">
+                            <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+                            {new Date(e.createdAt).toLocaleDateString()}
+                          </span>
+                        ) : "—"}
                       </td>
-                      <td className="px-3 py-2 text-right space-x-3">
-                        <button
-                          className="text-blue-600 hover:underline"
-                          onClick={() => {
-                            setEditing(e);
-                            setOpen(true);
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button className="text-emerald-600 hover:underline" onClick={() => setFunding(e)}>
-                          Fund
-                        </button>
-                        {refundable && (
-                          <button className="text-amber-600 hover:underline" onClick={() => setDefunding(e)}>
-                            Remove Funds
-                          </button>
-                        )}
-                        {!hasSpend && (
+
+                      <td className="px-3 py-2">
+                        {e?.dates?.due ? (
+                          <span className="inline-flex items-center gap-1">
+                            <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+                            {new Date(e.dates.due).toLocaleDateString()}
+                          </span>
+                        ) : "—"}
+                      </td>
+
+                      <td className="px-3 py-2">
+                        <div className="flex justify-end gap-2">
                           <button
-                            className={canDelete ? "text-red-600 hover:underline" : "text-slate-400 cursor-not-allowed"}
-                            onClick={() => (canDelete ? onDeleteEvent(e) : null)}
-                            disabled={!canDelete}
-                            title={canDelete ? "Delete" : e.fundedCents > 0 ? "Remove funds first to delete" : ""}
+                            className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-800"
+                            onClick={() => { setEditing(e); setOpen(true); }}
+                            title="Edit"
                           >
-                            Delete
+                            <Pencil className="w-4 h-4" />
+                            <span className="hidden sm:inline">Edit</span>
                           </button>
-                        )}
+
+                          <button
+                            className="inline-flex items-center gap-1.5 text-emerald-600 hover:text-emerald-800"
+                            onClick={() => setFunding(e)}
+                            title="Fund"
+                          >
+                            <PlusCircle className="w-4 h-4" />
+                            <span className="hidden sm:inline">Fund</span>
+                          </button>
+
+                          {refundable && (
+                            <button
+                              className="inline-flex items-center gap-1.5 text-amber-600 hover:text-amber-800"
+                              onClick={() => setDefunding(e)}
+                              title="Remove funds"
+                            >
+                              <MinusCircle className="w-4 h-4" />
+                              <span className="hidden sm:inline">Remove</span>
+                            </button>
+                          )}
+
+                          {!hasSpend && (
+                            <button
+                              className={[
+                                "inline-flex items-center gap-1.5",
+                                canDelete
+                                  ? "text-red-600 hover:text-red-800"
+                                  : "text-slate-400 cursor-not-allowed",
+                              ].join(" ")}
+                              onClick={() => (canDelete ? onDeleteEvent(e) : null)}
+                              disabled={!canDelete}
+                              title={canDelete ? "Delete" : e.fundedCents > 0 ? "Remove funds first to delete" : ""}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              <span className="hidden sm:inline">Delete</span>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

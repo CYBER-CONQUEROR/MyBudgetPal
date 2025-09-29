@@ -1,6 +1,6 @@
 // src/pages/DailyPage.jsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X, FileText } from "lucide-react";
+import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X, FileText, CalendarDays, Tag, Building2 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import api from "../api/api.js"; // axios instance with baseURL=/api and withCredentials:true
 import jsPDF from "jspdf";
@@ -263,7 +263,7 @@ export default function DailyPage() {
   const fixedStart = ymd(startOfMonth(today));
   const fixedEnd = ymd(endOfMonth(today));
   const period = ym(today);
- 
+
 
   // Filters for the LIST only
   const [filters, setFilters] = useState({
@@ -404,13 +404,13 @@ export default function DailyPage() {
     filters.title || filters.description || filters.start || filters.end || filters.categoryId || filters.accountId;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="max-w-6xl mx-auto px-4 md:px-6 py-6">
+    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
+      <div className="max-w-6xl mx-auto px-4 md:px-6 py-2">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight flex items-center gap-2">
-              <BarChart3 className="text-indigo-600" /> Day-to-Day Expenses
+            <h1 className="pb-1 text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">
+              Day-to-Day Expenses
             </h1>
             <p className="text-slate-600">This month’s plan and spending, with category usage.</p>
           </div>
@@ -436,11 +436,11 @@ export default function DailyPage() {
           </div>
         </div>
         {/* Summary + usage */}
-        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Left: donut + stats */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">This Month — {period}</h3>
+              <h3 className="text-xl font-semibold">This Month — {period}</h3>
               <span className="text-sm text-slate-500">Budget usage</span>
             </div>
 
@@ -481,8 +481,8 @@ export default function DailyPage() {
           </div>
 
           {/* Right: category bars (month-only) */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-semibold">Categories — usage (this month)</h3>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h3 className="text-xl font-semibold">Categories — Usage (This month)</h3>
             <div className="mt-4 space-y-3">
               {(subUsages.length ? subUsages : [{ name: "Unnamed", planned: 0, spent: 0, pct: 0 }]).map((r) => (
                 <div key={r.catId || r.name} className="rounded-xl border border-slate-100 p-3">
@@ -502,7 +502,7 @@ export default function DailyPage() {
         </div>
 
         {/* Filters */}
-        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 text-indigo-700 px-3 py-1 text-xs font-medium">
@@ -514,7 +514,7 @@ export default function DailyPage() {
                   className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-700 text-xs"
                   title="Clear all"
                 >
-                  <X size={14}/> Clear all
+                  <X size={14} /> Clear all
                 </button>
               )}
             </div>
@@ -593,13 +593,7 @@ export default function DailyPage() {
               </select>
             </div>
             <div className="flex gap-2 md:justify-end">
-              <button
-                onClick={reloadAll}
-                className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-full bg-indigo-600 text-white px-4 py-2 text-sm font-semibold hover:bg-indigo-700 shadow-sm"
-                title="Apply filters"
-              >
-                <RefreshCw size={14} /> Apply
-              </button>
+
               <button
                 onClick={() => { setFilters({ title: "", description: "", start: "", end: "", categoryId: "", accountId: "" }); }}
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm hover:bg-slate-50 shadow-sm"
@@ -612,9 +606,9 @@ export default function DailyPage() {
         </div>
 
         {/* Expenses list */}
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Expenses ({visibleExpenses.length})</h3>
+            <h3 className="text-xxl font-semibold">Expenses ({visibleExpenses.length})</h3>
             {!accounts.length && (
               <div className="inline-flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">
                 No accounts available — create one in Accounts.
@@ -627,41 +621,76 @@ export default function DailyPage() {
           ) : !visibleExpenses.length ? (
             <div className="mt-6 text-slate-500">No expenses in this range.</div>
           ) : (
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-              {visibleExpenses.map((e) => {
-                const amount = rupeesFrom(e.amountCents, e.amount);
-                const catName = e.categoryName || e.category?.name || e.category || "—";
-                return (
-                  <div key={e._id} className="rounded-xl border border-slate-200 p-4 hover:shadow-sm transition">
-                    <div className="flex items-start justify-between">
-                      <div className="min-w-0 pr-3">
-                        <div className="text-base font-semibold truncate">{e.title}</div>
-                        <div className="text-sm text-slate-600">
-                          {new Date(e.date).toLocaleDateString()} • {catName} • {accountName(e.accountId)}
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {visibleExpenses.length === 0 ? (
+                <div className="col-span-full text-center text-slate-500 py-8">
+                  No expenses to show
+                </div>
+              ) : (
+                visibleExpenses.map((e) => {
+                  const amount = rupeesFrom(e.amountCents, e.amount);
+                  const catName = e.categoryName || e.category?.name || e.category || "—";
+                  return (
+                    <div
+                      key={e._id}
+                      className="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm hover:shadow-md transition"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        {/* Left: title + meta + desc */}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-lg font-semibold text-slate-1000 truncate">
+                            {e.title}
+                          </div>
+
+                          {/* Meta row */}
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+                            <span className="inline-flex items-center gap-1">
+                              <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+                              {new Date(e.date).toLocaleDateString()}
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <Tag className="w-3.5 h-3.5 text-slate-400" />
+                              {catName}
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                              {accountName(e.accountId)}
+                            </span>
+                          </div>
+
+                          {e.description && (
+                            <div className="mt-2 text-sm text-slate-700 line-clamp-2">
+                              {e.description}
+                            </div>
+                          )}
                         </div>
-                        {e.description && <div className="mt-1 text-sm text-slate-700 line-clamp-3">{e.description}</div>}
-                      </div>
-                      <div className="text-right">
-                        <div className="text-lg font-semibold">{fmtLKR(amount)}</div>
-                        <div className="mt-2 flex gap-2 justify-end">
-                          <button
-                            onClick={() => onEdit(e)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:bg-slate-50"
-                          >
-                            <Edit2 size={14} /> Edit
-                          </button>
-                          <button
-                            onClick={() => onDelete(e._id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
-                          >
-                            <Trash2 size={14} /> Delete
-                          </button>
+
+                        {/* Right: amount + actions */}
+                        <div className="text-right shrink-0">
+                          <div className="text-lg font-semibold text-rose-600">
+                            {fmtLKR(amount)}
+                          </div>
+
+                          <div className="mt-2 flex gap-2 justify-end">
+                            <button
+                              onClick={() => onEdit(e)}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs md:text-sm hover:bg-slate-50"
+                            >
+                              <Edit2 className="w-4 h-4" /> Edit
+                            </button>
+                            <button
+                              onClick={() => onDelete(e._id)}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-1.5 text-xs md:text-sm text-rose-700 hover:bg-rose-50"
+                            >
+                              <Trash2 className="w-4 h-4" /> Delete
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           )}
         </div>
@@ -722,9 +751,9 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
   const [date, setDate] = useState(initial?.date ? ymd(new Date(initial.date)) : ymd(new Date()));
   const [accountId, setAccountId] = useState(
     initial?.accountId ||
-      accounts.find((a) => a.type === "cash")?._id ||
-      accounts?.[0]?._id ||
-      ""
+    accounts.find((a) => a.type === "cash")?._id ||
+    accounts?.[0]?._id ||
+    ""
   );
   const [description, setDescription] = useState(initial?.description || "");
   const [saving, setSaving] = useState(false);

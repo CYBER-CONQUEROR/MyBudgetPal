@@ -87,7 +87,6 @@ export default function Layout() {
     <aside className="flex h-full w-64 flex-col border-r border-slate-200 bg-white">
       {/* brand */}
       <div className="flex h-16 items-center gap-2 px-6 border-b border-slate-200">
-        <span className="inline-block h-6 w-6 rounded bg-indigo-600"></span>
         <span className="text-base font-bold text-slate-800">My Budget Pal</span>
       </div>
       {/* nav */}

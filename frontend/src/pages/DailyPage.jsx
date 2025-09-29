@@ -1,5 +1,5 @@
 // src/pages/DailyPage.jsx
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback,useRef } from "react";
 import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X, FileText, CalendarDays, Tag, Building2 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import api from "../api/api.js"; // axios instance with baseURL=/api and withCredentials:true
@@ -81,7 +81,7 @@ const accountsAPI = {
 /* =========================
    Money helpers
    ========================= */
-const centsFrom = (rupees) => Math.round(Number(rupees || 0) * 100);
+
 const rupeesFrom = (maybeCents, maybeRupees) =>
   maybeCents != null ? Number(maybeCents) / 100 : Number(maybeRupees || 0);
 const fmtLKR = (n) =>
@@ -739,16 +739,222 @@ function MiniStat({ label, value }) {
 /* =========================
    Expense Form Modal
    ========================= */
+const comma = (i) => i.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const toFixed2Raw = (plain) => {
+  let s = (plain || "").replace(/[^\d.]/g, "");
+
+  // only one dot
+  const firstDot = s.indexOf(".");
+  if (firstDot !== -1) {
+    s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, "");
+  }
+
+  // cannot start with dot
+  if (s.startsWith(".")) s = "0" + s;
+
+  // strip leading zeros on integer part; 2 decimals max
+  if (s.includes(".")) {
+    const [i, d] = s.split(".");
+    const I = (i.replace(/^0+(?=\d)/, "") || "0");
+    s = I + "." + (d || "").slice(0, 2);
+  } else {
+    s = (s.replace(/^0+(?=\d)/, "") || "0");
+  }
+
+  let n = Number(s);
+  if (!Number.isFinite(n) || n < 0) n = 0;
+  if (n > MAX_AMOUNT) n = MAX_AMOUNT;
+
+  return n.toFixed(2); // guaranteed 2 decimals
+};
+
+/* Convert raw "12345.67" -> display "12,345.67" */
+
+
+/* Parse display "12,345.67" -> numeric 12345.67 */
+/* Count significant chars (digits/dot) left of caret index */
+
+
+/* Find index in string where 'sigCount' significant chars have passed */
+
+
+
+/* ===== Fallback helpers (remove if you already have them) ===== */
+
+const centsFrom = (n) => Math.round(Number(n || 0) * 100);
+
+/* ===== Amount constraints ===== */
+const MAX_AMOUNT = 9_999_999.99;
+const SIG_RX = /[0-9.]/; // "significant" chars for caret math
+
+
+
+/* Sanitize to a fixed-2 raw numeric string (no commas), enforcing:
+   - positive only
+   - one dot max
+   - cannot start with dot
+   - max 2 decimals (so ".000" can't happen)
+   - clamp to MAX_AMOUNT
+*/
+
+
+/* Convert raw "12345.67" -> display "12,345.67" */
+const toDisplay = (rawFixed2) => {
+  const [i, d] = (rawFixed2 || "0.00").split(".");
+  return `${comma(i)}.${(d || "").padEnd(2, "0")}`;
+};
+
+/* Parse display "12,345.67" -> numeric 12345.67 */
+const fromDisplayNumber = (disp) => {
+  const s = (disp || "").replace(/,/g, "");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/* Count significant chars (digits/dot) left of caret index */
+const countSigLeftOf = (s, caretIdx) => {
+  let c = 0;
+  const upto = Math.min(caretIdx ?? 0, s.length);
+  for (let i = 0; i < upto; i++) if (SIG_RX.test(s[i])) c++;
+  return c;
+};
+
+/* Find index in string where 'sigCount' significant chars have passed */
+const indexForSigCount = (s, sigCount) => {
+  if (sigCount <= 0) return 0;
+  let c = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (SIG_RX.test(s[i])) c++;
+    if (c >= sigCount) return i + 1;
+  }
+  return s.length;
+};
 function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
   const isEdit = !!initial;
+
+  /* ===== Limit date to current month ===== */
+  const { minDateStr, maxDateStr } = useMemo(() => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const last  = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return { minDateStr: ymd(first), maxDateStr: ymd(last) };
+  }, []);
+
+  /* ===== Title (letters/spaces only) ===== */
   const [title, setTitle] = useState(initial?.title || "");
-  const [amount, setAmount] = useState(
-    (initial?.amountCents != null ? initial.amountCents / 100 : initial?.amount) || ""
-  );
+  const onTitleBeforeInput = (e) => {
+    if (e.inputType && !e.data) return; // deletions etc.
+    if (e.data && /[^A-Za-z\s]/.test(e.data)) e.preventDefault();
+  };
+  const onTitlePaste = (e) => {
+    e.preventDefault();
+    const t = (e.clipboardData?.getData("text") || "");
+    const cleaned = t.replace(/[^A-Za-z\s]/g, "");
+    if (!cleaned) return;
+    const target = e.target;
+    const start = target.selectionStart ?? title.length;
+    const end = target.selectionEnd ?? title.length;
+    setTitle(title.slice(0, start) + cleaned + title.slice(end));
+  };
+
+  /* ===== Amount (display + caret) via useRef-powered validator ===== */
+  const initialNumeric =
+    initial?.amountCents != null
+      ? Math.min(MAX_AMOUNT, Math.max(0, initial.amountCents / 100))
+      : Math.min(MAX_AMOUNT, Math.max(0, Number(initial?.amount) || 0));
+
+  const initialRaw = toFixed2Raw(String(initialNumeric));
+  const [amountDisplay, setAmountDisplay] = useState(toDisplay(initialRaw));
+
+  const amountRef = useRef(null);
+  const prevDisplayRef = useRef(amountDisplay);
+  const pendingSigRef = useRef(null); // where to put caret (by sig-count) after re-render
+
+  /* Core function: validate + format + track caret */
+  const validateAndFormatAmount = (inputEl, nextTyped) => {
+    const prevDisplay = prevDisplayRef.current;
+    const prevCaretIdx = inputEl.selectionStart ?? prevDisplay.length;
+
+    // how many "significant chars" were left of caret
+    const prevSig = countSigLeftOf(prevDisplay, prevCaretIdx);
+
+    // sanitize -> raw fixed-2 -> display with commas
+    const raw = toFixed2Raw((nextTyped || "").replace(/,/g, ""));
+    const nextDisplay = toDisplay(raw);
+
+    // remember caret sig-count for after state update
+    pendingSigRef.current = prevSig;
+
+    // update state + last display
+    prevDisplayRef.current = nextDisplay;
+    setAmountDisplay(nextDisplay);
+  };
+
+  // restore caret right after display changes, using the saved sig-count
+  useEffect(() => {
+    const el = amountRef.current;
+    if (!el) return;
+    if (pendingSigRef.current == null) return;
+
+    const desiredSig = pendingSigRef.current;
+    const nextIdx = indexForSigCount(amountDisplay, desiredSig);
+
+    requestAnimationFrame(() => {
+      el.setSelectionRange(nextIdx, nextIdx);
+    });
+
+    pendingSigRef.current = null;
+  }, [amountDisplay]);
+
+  // === ✨ Fix: '.' key moves caret to decimals so you can type them immediately
+  const jumpCaretToDecimals = () => {
+    const el = amountRef.current;
+    if (!el) return;
+    const dotIdx = amountDisplay.indexOf(".");
+    if (dotIdx >= 0) {
+      const target = dotIdx + 1;
+      requestAnimationFrame(() => {
+        el.setSelectionRange(target, target);
+      });
+    }
+  };
+
+  const onAmountKeyDown = (e) => {
+    if (e.key === "-" || e.key === "+") e.preventDefault();
+
+    // If user hits '.' or Numpad 'Decimal', jump cursor to after the dot.
+    if (e.key === "." || e.code === "NumpadDecimal" || e.key === "Decimal") {
+      e.preventDefault();
+      // disallow starting with dot (your rule),
+      // but since we always show ".00", just place the caret after the dot.
+      jumpCaretToDecimals();
+      return;
+    }
+  };
+
+  const onAmountBeforeInput = (e) => {
+    if (e.inputType && e.data && !/^[\d.]$/.test(e.data)) e.preventDefault();
+  };
+  const onAmountChange = (e) => validateAndFormatAmount(e.target, e.target.value);
+  const onAmountPaste  = (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData?.getData("text") || "");
+    validateAndFormatAmount(amountRef.current, text);
+  };
+  const onAmountBlur = () => {
+    validateAndFormatAmount(amountRef.current, amountDisplay);
+  };
+
+  /* ===== Date (clamped to this month) ===== */
+  const initialDate = initial?.date ? ymd(new Date(initial.date)) : ymd(new Date());
+  const clampDate = (dStr) => (dStr < minDateStr ? minDateStr : dStr > maxDateStr ? maxDateStr : dStr);
+  const [date, setDate] = useState(clampDate(initialDate));
+  const onDateChange = (e) => setDate(clampDate(e.target.value || date));
+
+  /* ===== Dropdowns / others ===== */
   const [categoryId, setCategoryId] = useState(
     initial?.categoryId || initial?.category?._id || categories?.[0]?._id || ""
   );
-  const [date, setDate] = useState(initial?.date ? ymd(new Date(initial.date)) : ymd(new Date()));
   const [accountId, setAccountId] = useState(
     initial?.accountId ||
     accounts.find((a) => a.type === "cash")?._id ||
@@ -759,19 +965,31 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
+  /* ===== Submit ===== */
   const submit = async (e) => {
     e.preventDefault();
     setErr("");
+
+    // title checks
     if (!title.trim()) return setErr("Title is required");
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) return setErr("Enter a valid amount");
+    if (/[^A-Za-z\s]/.test(title)) return setErr("Title can contain only letters and spaces");
+
+    // amount checks
+    const amountNum = Math.min(MAX_AMOUNT, Math.max(0, fromDisplayNumber(amountDisplay)));
+    if (!Number.isFinite(amountNum) || amountNum <= 0) return setErr("Enter a valid positive amount");
+    if (amountNum > MAX_AMOUNT) return setErr(`Maximum allowed is LKR ${MAX_AMOUNT.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+
+    // category/account
     if (!categoryId) return setErr("Pick a category");
     if (!accountId) return setErr("Pick an account");
 
+    // date range (this month)
+    if (date < minDateStr || date > maxDateStr) return setErr("Please pick a date within this month");
+
     const payload = {
       title: title.trim(),
-      amount: amt,
-      amountCents: centsFrom(amt),
+      amount: amountNum,
+      amountCents: centsFrom(amountNum),
       categoryId,
       date,
       description: description || "",
@@ -786,29 +1004,48 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
       <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
         <h3 className="text-lg font-semibold">{isEdit ? "Edit Expense" : "Add Expense"}</h3>
+
         <form onSubmit={submit} className="mt-4 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Title */}
             <div>
               <label className="block text-sm font-medium text-slate-700">Title</label>
               <input
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e) => setTitle(e.target.value.replace(/[^A-Za-z\s]/g, ""))}
+                onBeforeInput={onTitleBeforeInput}
+                onPaste={onTitlePaste}
                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
                 placeholder="Groceries"
+                inputMode="text"
               />
             </div>
+
+            {/* Amount */}
             <div>
               <label className="block text-sm font-medium text-slate-700">Amount (LKR)</label>
               <input
-                type="number" min="0" step="0.01"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                ref={amountRef}
+                type="text"
+                inputMode="decimal"
+                value={amountDisplay}
+                onChange={onAmountChange}
+                onBeforeInput={onAmountBeforeInput}
+                onKeyDown={onAmountKeyDown}
+                onPaste={onAmountPaste}
+                onBlur={onAmountBlur}
                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                placeholder="0.00"
+                aria-describedby="amountHelp"
               />
+              <div id="amountHelp" className="mt-1 text-xs text-slate-500">
+                Max 9,999,999.99 • 2 decimals • auto-formatted with commas
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Category */}
             <div>
               <label className="block text-sm font-medium text-slate-700">Category</label>
               <select
@@ -821,17 +1058,22 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
                 ))}
               </select>
             </div>
+
+            {/* Date (this month only) */}
             <div>
               <label className="block text-sm font-medium text-slate-700">Date</label>
               <input
                 type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={onDateChange}
+                min={minDateStr}
+                max={maxDateStr}
                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
               />
             </div>
           </div>
 
+          {/* Account */}
           <div>
             <label className="block text-sm font-medium text-slate-700">Account</label>
             <select
@@ -847,6 +1089,7 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
             </select>
           </div>
 
+          {/* Description */}
           <div>
             <label className="block text-sm font-medium text-slate-700">Description (optional)</label>
             <textarea
@@ -858,7 +1101,11 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
             />
           </div>
 
-          {err && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>}
+          {err && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              {err}
+            </div>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button
@@ -881,6 +1128,8 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
     </div>
   );
 }
+
+
 
 /* =========================
    Category Manager Modal

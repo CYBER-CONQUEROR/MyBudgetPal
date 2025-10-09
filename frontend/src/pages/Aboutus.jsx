@@ -174,13 +174,6 @@ export default function AboutUs() {
   </div>
 </section>
 
-
-      {/* Footer */}
-      <footer className="py-4 bg-primary text-white text-center">
-        <p className="mb-0">
-          &copy; {new Date().getFullYear()} MyBudgetPal. All Rights Reserved.
-        </p>
-      </footer>
     </div>
   );
 }

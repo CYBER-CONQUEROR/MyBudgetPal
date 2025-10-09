@@ -57,16 +57,7 @@ export default function BudgetForecast() {
               Best-of baselines + ARX with rolling backtest (last 18 months).
             </p>
           </div>
-          <button
-            className="btn btn-primary"
-            onClick={async () => {
-              if (!window.confirm(`Apply this plan for ${monthLabel(period)}?`)) return;
-              await apply();
-              window.location.href = `/budget?period=${period}`;
-            }}
-          >
-            Apply Plan
-          </button>
+          
         </div>
 
         {/* Top cards (custom, using money0) */}

@@ -355,8 +355,8 @@ function Bar({ value = 0, max = 0, hard = false }) {
   // choose fill color
   const fill =
     over ? "from-rose-500 to-rose-400"
-    : warn ? "from-amber-500 to-amber-400"
-    : "from-emerald-500 to-emerald-400";
+      : warn ? "from-amber-500 to-amber-400"
+        : "from-emerald-500 to-emerald-400";
 
   return (
     <div
@@ -1441,8 +1441,8 @@ function EventCard({ ev, onEdit, onFund, onDefund, onSpend, onDelete }) {
         {(ev.spentCents || 0) === 0 && (
           <button
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border ${ev.fundedCents > 0
-                ? "border-slate-300 text-slate-400 cursor-not-allowed"
-                : "border-red-300 text-red-600 hover:bg-red-50"
+              ? "border-slate-300 text-slate-400 cursor-not-allowed"
+              : "border-red-300 text-red-600 hover:bg-red-50"
               }`}
             onClick={() => (ev.fundedCents > 0 ? null : onDelete(ev))}
             disabled={ev.fundedCents > 0}
@@ -1681,7 +1681,7 @@ export default function EventsPage() {
               Refresh
             </button>
             <button
-            
+
               onClick={() =>
                 generateEventExpensesReportPDF({
                   rows: filtered,
@@ -1856,24 +1856,29 @@ export default function EventsPage() {
                 <th className="px-3 py-2 text-right">Spent</th>
                 <th className="px-3 py-2 text-left">Created</th>
                 <th className="px-3 py-2 text-left">Due</th>
-                <th className="px-3 py-2 text-right">Actions</th>
+                <th className="px-3 py-2 text-right min-w-[200px] whitespace-nowrap">Actions</th>
               </tr>
             </thead>
 
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-slate-500 italic">
+                  <td
+                    colSpan={9}
+                    className="px-3 py-6 text-center text-slate-500 italic"
+                  >
                     No events
                   </td>
                 </tr>
               ) : (
                 filtered.map((e) => {
                   const hasSpend = (e.spentCents || 0) > 0;
-                  const refundable = Math.max(0, (e.fundedCents || 0) - (e.spentCents || 0)) > 0;
+                  const refundable =
+                    Math.max(0, (e.fundedCents || 0) - (e.spentCents || 0)) > 0;
                   const canDelete = !hasSpend && (e.fundedCents || 0) === 0;
 
-                  const accountName = accounts.find((a) => a._id === e.primaryAccountId)?.name || "—";
+                  const accountName =
+                    accounts.find((a) => a._id === e.primaryAccountId)?.name || "—";
                   const modePill =
                     e.mode === "single"
                       ? "bg-slate-100 text-slate-700"
@@ -1884,91 +1889,106 @@ export default function EventsPage() {
                       key={e._id}
                       className="border-t hover:bg-slate-50 transition-colors"
                     >
-                      <td className="px-3 py-2 font-medium text-slate-800">{e.title}</td>
+                      <td className="px-3 py-2 align-middle font-medium text-slate-800">
+                        {e.title}
+                      </td>
 
-                      <td className="px-3 py-2">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs ${modePill}`}>
+                      <td className="px-3 py-2 align-middle">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs ${modePill}`}
+                        >
                           {e.mode === "single" ? "Single" : "Itemized"}
                         </span>
                       </td>
 
-                      <td className="px-3 py-2">{accountName}</td>
+                      <td className="px-3 py-2 align-middle">{accountName}</td>
 
-                      <td className="px-3 py-2 text-right font-semibold">
+                      <td className="px-3 py-2 align-middle text-right font-semibold">
                         {currency(e.targetCents, e.currency || "LKR")}
                       </td>
 
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 align-middle text-right">
                         {currency(e.fundedCents, e.currency || "LKR")}
                       </td>
 
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 align-middle text-right">
                         {currency(e.spentCents, e.currency || "LKR")}
                       </td>
 
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 align-middle">
                         {e?.createdAt ? (
                           <span className="inline-flex items-center gap-1">
                             <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
                             {new Date(e.createdAt).toLocaleDateString()}
                           </span>
-                        ) : "—"}
+                        ) : (
+                          "—"
+                        )}
                       </td>
 
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 align-middle">
                         {e?.dates?.due ? (
                           <span className="inline-flex items-center gap-1">
                             <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
                             {new Date(e.dates.due).toLocaleDateString()}
                           </span>
-                        ) : "—"}
+                        ) : (
+                          "—"
+                        )}
                       </td>
 
-                      <td className="px-3 py-2">
-                        <div className="flex justify-end gap-2">
+                      {/* Actions (icon-only) */}
+                      <td className="px-3 py-2 align-middle text-right whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-3">
                           <button
-                            className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-800"
-                            onClick={() => { setEditing(e); setOpen(true); }}
+                            className="text-blue-600 hover:text-blue-800"
+                            onClick={() => {
+                              setEditing(e);
+                              setOpen(true);
+                            }}
                             title="Edit"
                           >
-                            <Pencil className="w-4 h-4" />
-                            <span className="hidden sm:inline">Edit</span>
+                            <Pencil className="w-5 h-5" />
                           </button>
 
                           <button
-                            className="inline-flex items-center gap-1.5 text-emerald-600 hover:text-emerald-800"
+                            className="text-emerald-600 hover:text-emerald-800"
                             onClick={() => setFunding(e)}
                             title="Fund"
                           >
-                            <PlusCircle className="w-4 h-4" />
-                            <span className="hidden sm:inline">Fund</span>
+                            <PlusCircle className="w-5 h-5" />
                           </button>
 
                           {refundable && (
                             <button
-                              className="inline-flex items-center gap-1.5 text-amber-600 hover:text-amber-800"
+                              className="text-amber-600 hover:text-amber-800"
                               onClick={() => setDefunding(e)}
                               title="Remove funds"
                             >
-                              <MinusCircle className="w-4 h-4" />
-                              <span className="hidden sm:inline">Remove</span>
+                              <MinusCircle className="w-5 h-5" />
                             </button>
                           )}
 
                           {!hasSpend && (
                             <button
                               className={[
-                                "inline-flex items-center gap-1.5",
                                 canDelete
                                   ? "text-red-600 hover:text-red-800"
                                   : "text-slate-400 cursor-not-allowed",
                               ].join(" ")}
-                              onClick={() => (canDelete ? onDeleteEvent(e) : null)}
+                              onClick={() =>
+                                canDelete ? onDeleteEvent(e) : null
+                              }
                               disabled={!canDelete}
-                              title={canDelete ? "Delete" : e.fundedCents > 0 ? "Remove funds first to delete" : ""}
+                              title={
+                                canDelete
+                                  ? "Delete"
+                                  : e.fundedCents > 0
+                                    ? "Remove funds first to delete"
+                                    : ""
+                              }
                             >
-                              <Trash2 className="w-4 h-4" />
-                              <span className="hidden sm:inline">Delete</span>
+                              <Trash2 className="w-5 h-5" />
                             </button>
                           )}
                         </div>
@@ -1980,6 +2000,7 @@ export default function EventsPage() {
             </tbody>
           </table>
         </div>
+
 
         {/* Modals */}
         <EventForm

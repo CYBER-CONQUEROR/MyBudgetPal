@@ -1,6 +1,6 @@
 // src/pages/DailyPage.jsx
-import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X, FileText } from "lucide-react";
+import React, { useEffect, useMemo, useState, useCallback,useRef } from "react";
+import { BarChart3, Plus, Settings, Edit2, Trash2, RefreshCw, Search, Filter, X, FileText, CalendarDays, Tag, Building2 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import api from "../api/api.js"; // axios instance with baseURL=/api and withCredentials:true
 import jsPDF from "jspdf";
@@ -81,7 +81,7 @@ const accountsAPI = {
 /* =========================
    Money helpers
    ========================= */
-const centsFrom = (rupees) => Math.round(Number(rupees || 0) * 100);
+
 const rupeesFrom = (maybeCents, maybeRupees) =>
   maybeCents != null ? Number(maybeCents) / 100 : Number(maybeRupees || 0);
 const fmtLKR = (n) =>
@@ -263,7 +263,7 @@ export default function DailyPage() {
   const fixedStart = ymd(startOfMonth(today));
   const fixedEnd = ymd(endOfMonth(today));
   const period = ym(today);
- 
+
 
   // Filters for the LIST only
   const [filters, setFilters] = useState({
@@ -404,13 +404,13 @@ export default function DailyPage() {
     filters.title || filters.description || filters.start || filters.end || filters.categoryId || filters.accountId;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="max-w-6xl mx-auto px-4 md:px-6 py-6">
+    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
+      <div className="max-w-6xl mx-auto px-4 md:px-6 py-2">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight flex items-center gap-2">
-              <BarChart3 className="text-indigo-600" /> Day-to-Day Expenses
+            <h1 className="pb-1 text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">
+              Day-to-Day Expenses
             </h1>
             <p className="text-slate-600">This month’s plan and spending, with category usage.</p>
           </div>
@@ -436,11 +436,11 @@ export default function DailyPage() {
           </div>
         </div>
         {/* Summary + usage */}
-        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Left: donut + stats */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">This Month — {period}</h3>
+              <h3 className="text-xl font-semibold">This Month — {period}</h3>
               <span className="text-sm text-slate-500">Budget usage</span>
             </div>
 
@@ -481,8 +481,8 @@ export default function DailyPage() {
           </div>
 
           {/* Right: category bars (month-only) */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-semibold">Categories — usage (this month)</h3>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h3 className="text-xl font-semibold">Categories — Usage (This month)</h3>
             <div className="mt-4 space-y-3">
               {(subUsages.length ? subUsages : [{ name: "Unnamed", planned: 0, spent: 0, pct: 0 }]).map((r) => (
                 <div key={r.catId || r.name} className="rounded-xl border border-slate-100 p-3">
@@ -502,7 +502,7 @@ export default function DailyPage() {
         </div>
 
         {/* Filters */}
-        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 text-indigo-700 px-3 py-1 text-xs font-medium">
@@ -514,7 +514,7 @@ export default function DailyPage() {
                   className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-700 text-xs"
                   title="Clear all"
                 >
-                  <X size={14}/> Clear all
+                  <X size={14} /> Clear all
                 </button>
               )}
             </div>
@@ -593,13 +593,7 @@ export default function DailyPage() {
               </select>
             </div>
             <div className="flex gap-2 md:justify-end">
-              <button
-                onClick={reloadAll}
-                className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-full bg-indigo-600 text-white px-4 py-2 text-sm font-semibold hover:bg-indigo-700 shadow-sm"
-                title="Apply filters"
-              >
-                <RefreshCw size={14} /> Apply
-              </button>
+
               <button
                 onClick={() => { setFilters({ title: "", description: "", start: "", end: "", categoryId: "", accountId: "" }); }}
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm hover:bg-slate-50 shadow-sm"
@@ -612,9 +606,9 @@ export default function DailyPage() {
         </div>
 
         {/* Expenses list */}
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Expenses ({visibleExpenses.length})</h3>
+            <h3 className="text-xxl font-semibold">Expenses ({visibleExpenses.length})</h3>
             {!accounts.length && (
               <div className="inline-flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">
                 No accounts available — create one in Accounts.
@@ -627,41 +621,76 @@ export default function DailyPage() {
           ) : !visibleExpenses.length ? (
             <div className="mt-6 text-slate-500">No expenses in this range.</div>
           ) : (
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-              {visibleExpenses.map((e) => {
-                const amount = rupeesFrom(e.amountCents, e.amount);
-                const catName = e.categoryName || e.category?.name || e.category || "—";
-                return (
-                  <div key={e._id} className="rounded-xl border border-slate-200 p-4 hover:shadow-sm transition">
-                    <div className="flex items-start justify-between">
-                      <div className="min-w-0 pr-3">
-                        <div className="text-base font-semibold truncate">{e.title}</div>
-                        <div className="text-sm text-slate-600">
-                          {new Date(e.date).toLocaleDateString()} • {catName} • {accountName(e.accountId)}
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {visibleExpenses.length === 0 ? (
+                <div className="col-span-full text-center text-slate-500 py-8">
+                  No expenses to show
+                </div>
+              ) : (
+                visibleExpenses.map((e) => {
+                  const amount = rupeesFrom(e.amountCents, e.amount);
+                  const catName = e.categoryName || e.category?.name || e.category || "—";
+                  return (
+                    <div
+                      key={e._id}
+                      className="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm hover:shadow-md transition"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        {/* Left: title + meta + desc */}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-lg font-semibold text-slate-1000 truncate">
+                            {e.title}
+                          </div>
+
+                          {/* Meta row */}
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+                            <span className="inline-flex items-center gap-1">
+                              <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+                              {new Date(e.date).toLocaleDateString()}
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <Tag className="w-3.5 h-3.5 text-slate-400" />
+                              {catName}
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                              {accountName(e.accountId)}
+                            </span>
+                          </div>
+
+                          {e.description && (
+                            <div className="mt-2 text-sm text-slate-700 line-clamp-2">
+                              {e.description}
+                            </div>
+                          )}
                         </div>
-                        {e.description && <div className="mt-1 text-sm text-slate-700 line-clamp-3">{e.description}</div>}
-                      </div>
-                      <div className="text-right">
-                        <div className="text-lg font-semibold">{fmtLKR(amount)}</div>
-                        <div className="mt-2 flex gap-2 justify-end">
-                          <button
-                            onClick={() => onEdit(e)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm hover:bg-slate-50"
-                          >
-                            <Edit2 size={14} /> Edit
-                          </button>
-                          <button
-                            onClick={() => onDelete(e._id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50"
-                          >
-                            <Trash2 size={14} /> Delete
-                          </button>
+
+                        {/* Right: amount + actions */}
+                        <div className="text-right shrink-0">
+                          <div className="text-lg font-semibold text-rose-600">
+                            {fmtLKR(amount)}
+                          </div>
+
+                          <div className="mt-2 flex gap-2 justify-end">
+                            <button
+                              onClick={() => onEdit(e)}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs md:text-sm hover:bg-slate-50"
+                            >
+                              <Edit2 className="w-4 h-4" /> Edit
+                            </button>
+                            <button
+                              onClick={() => onDelete(e._id)}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-1.5 text-xs md:text-sm text-rose-700 hover:bg-rose-50"
+                            >
+                              <Trash2 className="w-4 h-4" /> Delete
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           )}
         </div>
@@ -710,39 +739,257 @@ function MiniStat({ label, value }) {
 /* =========================
    Expense Form Modal
    ========================= */
+const comma = (i) => i.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const toFixed2Raw = (plain) => {
+  let s = (plain || "").replace(/[^\d.]/g, "");
+
+  // only one dot
+  const firstDot = s.indexOf(".");
+  if (firstDot !== -1) {
+    s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, "");
+  }
+
+  // cannot start with dot
+  if (s.startsWith(".")) s = "0" + s;
+
+  // strip leading zeros on integer part; 2 decimals max
+  if (s.includes(".")) {
+    const [i, d] = s.split(".");
+    const I = (i.replace(/^0+(?=\d)/, "") || "0");
+    s = I + "." + (d || "").slice(0, 2);
+  } else {
+    s = (s.replace(/^0+(?=\d)/, "") || "0");
+  }
+
+  let n = Number(s);
+  if (!Number.isFinite(n) || n < 0) n = 0;
+  if (n > MAX_AMOUNT) n = MAX_AMOUNT;
+
+  return n.toFixed(2); // guaranteed 2 decimals
+};
+
+/* Convert raw "12345.67" -> display "12,345.67" */
+
+
+/* Parse display "12,345.67" -> numeric 12345.67 */
+/* Count significant chars (digits/dot) left of caret index */
+
+
+/* Find index in string where 'sigCount' significant chars have passed */
+
+
+
+/* ===== Fallback helpers (remove if you already have them) ===== */
+
+const centsFrom = (n) => Math.round(Number(n || 0) * 100);
+
+/* ===== Amount constraints ===== */
+const MAX_AMOUNT = 9_999_999.99;
+const SIG_RX = /[0-9.]/; // "significant" chars for caret math
+
+
+
+/* Sanitize to a fixed-2 raw numeric string (no commas), enforcing:
+   - positive only
+   - one dot max
+   - cannot start with dot
+   - max 2 decimals (so ".000" can't happen)
+   - clamp to MAX_AMOUNT
+*/
+
+
+/* Convert raw "12345.67" -> display "12,345.67" */
+const toDisplay = (rawFixed2) => {
+  const [i, d] = (rawFixed2 || "0.00").split(".");
+  return `${comma(i)}.${(d || "").padEnd(2, "0")}`;
+};
+
+/* Parse display "12,345.67" -> numeric 12345.67 */
+const fromDisplayNumber = (disp) => {
+  const s = (disp || "").replace(/,/g, "");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/* Count significant chars (digits/dot) left of caret index */
+const countSigLeftOf = (s, caretIdx) => {
+  let c = 0;
+  const upto = Math.min(caretIdx ?? 0, s.length);
+  for (let i = 0; i < upto; i++) if (SIG_RX.test(s[i])) c++;
+  return c;
+};
+
+/* Find index in string where 'sigCount' significant chars have passed */
+const indexForSigCount = (s, sigCount) => {
+  if (sigCount <= 0) return 0;
+  let c = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (SIG_RX.test(s[i])) c++;
+    if (c >= sigCount) return i + 1;
+  }
+  return s.length;
+};
 function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
   const isEdit = !!initial;
+
+  /* ===== Limit date to current month ===== */
+  const { minDateStr, maxDateStr } = useMemo(() => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const last  = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return { minDateStr: ymd(first), maxDateStr: ymd(last) };
+  }, []);
+
+  /* ===== Title (letters/spaces only) ===== */
   const [title, setTitle] = useState(initial?.title || "");
-  const [amount, setAmount] = useState(
-    (initial?.amountCents != null ? initial.amountCents / 100 : initial?.amount) || ""
-  );
+  const onTitleBeforeInput = (e) => {
+    if (e.inputType && !e.data) return; // deletions etc.
+    if (e.data && /[^A-Za-z\s]/.test(e.data)) e.preventDefault();
+  };
+  const onTitlePaste = (e) => {
+    e.preventDefault();
+    const t = (e.clipboardData?.getData("text") || "");
+    const cleaned = t.replace(/[^A-Za-z\s]/g, "");
+    if (!cleaned) return;
+    const target = e.target;
+    const start = target.selectionStart ?? title.length;
+    const end = target.selectionEnd ?? title.length;
+    setTitle(title.slice(0, start) + cleaned + title.slice(end));
+  };
+
+  /* ===== Amount (display + caret) via useRef-powered validator ===== */
+  const initialNumeric =
+    initial?.amountCents != null
+      ? Math.min(MAX_AMOUNT, Math.max(0, initial.amountCents / 100))
+      : Math.min(MAX_AMOUNT, Math.max(0, Number(initial?.amount) || 0));
+
+  const initialRaw = toFixed2Raw(String(initialNumeric));
+  const [amountDisplay, setAmountDisplay] = useState(toDisplay(initialRaw));
+
+  const amountRef = useRef(null);
+  const prevDisplayRef = useRef(amountDisplay);
+  const pendingSigRef = useRef(null); // where to put caret (by sig-count) after re-render
+
+  /* Core function: validate + format + track caret */
+  const validateAndFormatAmount = (inputEl, nextTyped) => {
+    const prevDisplay = prevDisplayRef.current;
+    const prevCaretIdx = inputEl.selectionStart ?? prevDisplay.length;
+
+    // how many "significant chars" were left of caret
+    const prevSig = countSigLeftOf(prevDisplay, prevCaretIdx);
+
+    // sanitize -> raw fixed-2 -> display with commas
+    const raw = toFixed2Raw((nextTyped || "").replace(/,/g, ""));
+    const nextDisplay = toDisplay(raw);
+
+    // remember caret sig-count for after state update
+    pendingSigRef.current = prevSig;
+
+    // update state + last display
+    prevDisplayRef.current = nextDisplay;
+    setAmountDisplay(nextDisplay);
+  };
+
+  // restore caret right after display changes, using the saved sig-count
+  useEffect(() => {
+    const el = amountRef.current;
+    if (!el) return;
+    if (pendingSigRef.current == null) return;
+
+    const desiredSig = pendingSigRef.current;
+    const nextIdx = indexForSigCount(amountDisplay, desiredSig);
+
+    requestAnimationFrame(() => {
+      el.setSelectionRange(nextIdx, nextIdx);
+    });
+
+    pendingSigRef.current = null;
+  }, [amountDisplay]);
+
+  // === ✨ Fix: '.' key moves caret to decimals so you can type them immediately
+  const jumpCaretToDecimals = () => {
+    const el = amountRef.current;
+    if (!el) return;
+    const dotIdx = amountDisplay.indexOf(".");
+    if (dotIdx >= 0) {
+      const target = dotIdx + 1;
+      requestAnimationFrame(() => {
+        el.setSelectionRange(target, target);
+      });
+    }
+  };
+
+  const onAmountKeyDown = (e) => {
+    if (e.key === "-" || e.key === "+") e.preventDefault();
+
+    // If user hits '.' or Numpad 'Decimal', jump cursor to after the dot.
+    if (e.key === "." || e.code === "NumpadDecimal" || e.key === "Decimal") {
+      e.preventDefault();
+      // disallow starting with dot (your rule),
+      // but since we always show ".00", just place the caret after the dot.
+      jumpCaretToDecimals();
+      return;
+    }
+  };
+
+  const onAmountBeforeInput = (e) => {
+    if (e.inputType && e.data && !/^[\d.]$/.test(e.data)) e.preventDefault();
+  };
+  const onAmountChange = (e) => validateAndFormatAmount(e.target, e.target.value);
+  const onAmountPaste  = (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData?.getData("text") || "");
+    validateAndFormatAmount(amountRef.current, text);
+  };
+  const onAmountBlur = () => {
+    validateAndFormatAmount(amountRef.current, amountDisplay);
+  };
+
+  /* ===== Date (clamped to this month) ===== */
+  const initialDate = initial?.date ? ymd(new Date(initial.date)) : ymd(new Date());
+  const clampDate = (dStr) => (dStr < minDateStr ? minDateStr : dStr > maxDateStr ? maxDateStr : dStr);
+  const [date, setDate] = useState(clampDate(initialDate));
+  const onDateChange = (e) => setDate(clampDate(e.target.value || date));
+
+  /* ===== Dropdowns / others ===== */
   const [categoryId, setCategoryId] = useState(
     initial?.categoryId || initial?.category?._id || categories?.[0]?._id || ""
   );
-  const [date, setDate] = useState(initial?.date ? ymd(new Date(initial.date)) : ymd(new Date()));
   const [accountId, setAccountId] = useState(
     initial?.accountId ||
-      accounts.find((a) => a.type === "cash")?._id ||
-      accounts?.[0]?._id ||
-      ""
+    accounts.find((a) => a.type === "cash")?._id ||
+    accounts?.[0]?._id ||
+    ""
   );
   const [description, setDescription] = useState(initial?.description || "");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
+  /* ===== Submit ===== */
   const submit = async (e) => {
     e.preventDefault();
     setErr("");
+
+    // title checks
     if (!title.trim()) return setErr("Title is required");
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) return setErr("Enter a valid amount");
+    if (/[^A-Za-z\s]/.test(title)) return setErr("Title can contain only letters and spaces");
+
+    // amount checks
+    const amountNum = Math.min(MAX_AMOUNT, Math.max(0, fromDisplayNumber(amountDisplay)));
+    if (!Number.isFinite(amountNum) || amountNum <= 0) return setErr("Enter a valid positive amount");
+    if (amountNum > MAX_AMOUNT) return setErr(`Maximum allowed is LKR ${MAX_AMOUNT.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+
+    // category/account
     if (!categoryId) return setErr("Pick a category");
     if (!accountId) return setErr("Pick an account");
 
+    // date range (this month)
+    if (date < minDateStr || date > maxDateStr) return setErr("Please pick a date within this month");
+
     const payload = {
       title: title.trim(),
-      amount: amt,
-      amountCents: centsFrom(amt),
+      amount: amountNum,
+      amountCents: centsFrom(amountNum),
       categoryId,
       date,
       description: description || "",
@@ -757,29 +1004,48 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
       <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
         <h3 className="text-lg font-semibold">{isEdit ? "Edit Expense" : "Add Expense"}</h3>
+
         <form onSubmit={submit} className="mt-4 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Title */}
             <div>
               <label className="block text-sm font-medium text-slate-700">Title</label>
               <input
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e) => setTitle(e.target.value.replace(/[^A-Za-z\s]/g, ""))}
+                onBeforeInput={onTitleBeforeInput}
+                onPaste={onTitlePaste}
                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
                 placeholder="Groceries"
+                inputMode="text"
               />
             </div>
+
+            {/* Amount */}
             <div>
               <label className="block text-sm font-medium text-slate-700">Amount (LKR)</label>
               <input
-                type="number" min="0" step="0.01"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                ref={amountRef}
+                type="text"
+                inputMode="decimal"
+                value={amountDisplay}
+                onChange={onAmountChange}
+                onBeforeInput={onAmountBeforeInput}
+                onKeyDown={onAmountKeyDown}
+                onPaste={onAmountPaste}
+                onBlur={onAmountBlur}
                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                placeholder="0.00"
+                aria-describedby="amountHelp"
               />
+              <div id="amountHelp" className="mt-1 text-xs text-slate-500">
+                Max 9,999,999.99 • 2 decimals • auto-formatted with commas
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Category */}
             <div>
               <label className="block text-sm font-medium text-slate-700">Category</label>
               <select
@@ -792,17 +1058,22 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
                 ))}
               </select>
             </div>
+
+            {/* Date (this month only) */}
             <div>
               <label className="block text-sm font-medium text-slate-700">Date</label>
               <input
                 type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={onDateChange}
+                min={minDateStr}
+                max={maxDateStr}
                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
               />
             </div>
           </div>
 
+          {/* Account */}
           <div>
             <label className="block text-sm font-medium text-slate-700">Account</label>
             <select
@@ -818,6 +1089,7 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
             </select>
           </div>
 
+          {/* Description */}
           <div>
             <label className="block text-sm font-medium text-slate-700">Description (optional)</label>
             <textarea
@@ -829,7 +1101,11 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
             />
           </div>
 
-          {err && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>}
+          {err && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              {err}
+            </div>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button
@@ -853,6 +1129,8 @@ function ExpenseFormModal({ categories, accounts, initial, onClose, onSave }) {
   );
 }
 
+
+
 /* =========================
    Category Manager Modal
    ========================= */
@@ -860,21 +1138,96 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   const [list, setList] = useState(categories || []);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // tiny inline bubble
+  const Bubble = ({ show, message }) => (
+    <div
+      className={
+        "pointer-events-none absolute left-0 top-[100%] mt-1 text-xs rounded-lg " +
+        "bg-rose-50 text-rose-700 border border-rose-300 px-2 py-1 shadow-sm " +
+        "transition-opacity duration-150 " + (show ? "opacity-100" : "opacity-0")
+      }
+      role="status"
+      aria-live="polite"
+    >
+      {message}
+    </div>
+  );
+  const [bubble, setBubble] = useState({ key: null, msg: "" });
+  const bubbleTimerRef = React.useRef(null);
+  const showBubble = (key, msg, ms = 1600) => {
+    if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
+    setBubble({ key, msg });
+    bubbleTimerRef.current = setTimeout(() => setBubble({ key: null, msg: "" }), ms);
+  };
+
   React.useEffect(() => setList(categories || []), [categories]);
 
   const inUseCount = React.useCallback(
-    (catId) => expenses.filter((e) => String(e.categoryId) === String(catId) || String(e.category?._id) === String(catId)).length,
+    (catId) =>
+      expenses.filter(
+        (e) =>
+          String(e.categoryId) === String(catId) ||
+          String(e.category?._id) === String(catId)
+      ).length,
     [expenses]
   );
 
+  // ===== letters-only guards (Unicode letters + spaces) =====
+  const lettersOnlyFullRe = /^[\p{L}\s]*$/u;   // for full string validation
+  const lettersOnlyCharRe = /^[\p{L}\s]$/u;    // for single char keypress
+
+  const onNewNameKeyDown = (e) => {
+    // allow control/navigation keys
+    const ctrlKeys = [
+      "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+      "Home", "End", "Tab", "Enter"
+    ];
+    if (ctrlKeys.includes(e.key)) return;
+
+    // if it's a single printable char, ensure it's a letter or space
+    if (e.key.length === 1 && !lettersOnlyCharRe.test(e.key)) {
+      e.preventDefault();
+      showBubble("newName", "Letters and spaces only.");
+    }
+  };
+
+  const onNewNameChange = (e) => {
+    const v = e.target.value;
+    if (lettersOnlyFullRe.test(v)) {
+      setNewName(v);
+    } else {
+      // block update and hint
+      showBubble("newName", "Letters and spaces only.");
+    }
+  };
+
+  const onNewNamePaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    if (!lettersOnlyFullRe.test(text)) {
+      e.preventDefault();
+      showBubble("newName", "Letters and spaces only.");
+    }
+  };
+
+  const isDuplicate = (name) =>
+    list.some((c) => (c.name || "").toLowerCase() === name.toLowerCase());
+
   const add = async () => {
     const name = (newName || "").trim();
-    if (!name) return;
-    // client-side dup guard (case-insensitive)
-    if (list.some(c => (c.name || "").toLowerCase() === name.toLowerCase())) {
-      alert("Category already exists.");
+    if (!name) {
+      showBubble("newName", "Name is required.");
       return;
     }
+    if (!lettersOnlyFullRe.test(name)) {
+      showBubble("newName", "Letters and spaces only.");
+      return;
+    }
+    if (isDuplicate(name)) {
+      showBubble("newName", "Category already exists.");
+      return;
+    }
+
     setBusy(true);
     try {
       await categoriesAPI.create(name);
@@ -882,6 +1235,7 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
       setList(res || []);
       setNewName("");
     } catch (e) {
+      // keeping network/server failures as alerts so you notice action failure
       alert(e.message || "Failed to create category");
     } finally {
       setBusy(false);
@@ -891,7 +1245,13 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
   const rename = async (id, next) => {
     const name = (next || "").trim();
     if (!name) return;
-    if (list.some(c => c._id !== id && (c.name || "").toLowerCase() === name.toLowerCase())) {
+    if (!lettersOnlyFullRe.test(name)) {
+      // we can’t show a bubble here because the input lives inside CatRow;
+      // just block silently — or swap to alert if you prefer.
+      alert("Letters and spaces only.");
+      return;
+    }
+    if (list.some((c) => c._id !== id && (c.name || "").toLowerCase() === name.toLowerCase())) {
       alert("Category already exists.");
       return;
     }
@@ -909,7 +1269,14 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
 
   const remove = async (id) => {
     const used = inUseCount(id);
-    if (!window.confirm(used ? `This category is used by ${used} expense(s). Delete and reassign to "Other"?` : "Delete category?")) return;
+    if (
+      !window.confirm(
+        used
+          ? `This category is used by ${used} expense(s). Delete and reassign to "Other"?`
+          : "Delete category?"
+      )
+    )
+      return;
     setBusy(true);
     try {
       await categoriesAPI.remove(id, "Other");
@@ -922,6 +1289,12 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
     }
   };
 
+  // quick validity to disable the Add button
+  const addDisabled =
+    busy ||
+    !(newName || "").trim() ||
+    !lettersOnlyFullRe.test((newName || "").trim());
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={() => onClose(true)} />
@@ -929,15 +1302,20 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
         <h3 className="text-lg font-semibold">Manage Categories</h3>
 
         <div className="mt-4 flex gap-2">
-          <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="New category"
-            className="flex-1 rounded-xl border border-slate-300 px-3 py-2"
-          />
+          <div className="relative flex-1">
+            <input
+              value={newName}
+              onChange={onNewNameChange}
+              onKeyDown={onNewNameKeyDown}
+              onPaste={onNewNamePaste}
+              placeholder="New category"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            />
+            <Bubble show={bubble.key === "newName"} message={bubble.msg} />
+          </div>
           <button
             onClick={add}
-            disabled={busy}
+            disabled={addDisabled}
             className="rounded-xl bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-70"
           >
             Add
@@ -954,7 +1332,9 @@ function CategoryManagerModal({ categories, expenses, onClose }) {
               onDelete={() => remove(c._id)}
             />
           ))}
-          {!list.length && <div className="p-4 text-sm text-slate-500">No categories yet.</div>}
+          {!list.length && (
+            <div className="p-4 text-sm text-slate-500">No categories yet.</div>
+          )}
         </div>
 
         <div className="mt-4 flex justify-end">

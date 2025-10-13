@@ -1,23 +1,22 @@
 body {
-  font-family: Arial, sans-serif;
-  background-color: #f7f9fc;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
   margin: 0;
   padding: 0;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
   min-height: 100vh;
 }
 
 .terms-container {
   width: 100%;
-  max-width: 800px;
+  max-width: 900px;
   background-color: #ffffff;
-  padding: 40px;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-  border-radius: 8px;
-  margin-top: 50px;
+  padding: 60px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  border-radius: 16px;
+  margin: 50px auto;
   box-sizing: border-box;
+  position: relative;
+  z-index: 1;
 }
 
 .agreement-label {
@@ -29,21 +28,65 @@ body {
 }
 
 .terms-header h1 {
-  font-size: 36px;
+  font-size: 42px;
   color: #1a202c;
+  margin: 0 0 10px 0;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.last-updated {
+  font-size: 14px;
+  color: #64748b;
   margin: 0;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .terms-content {
-  margin-top: 20px;
+  margin-top: 40px;
+}
+
+.terms-section {
+  margin-bottom: 40px;
+  padding-bottom: 30px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.terms-section:last-of-type {
+  border-bottom: none;
+}
+
+.terms-section h2 {
+  font-size: 24px;
+  color: #1a202c;
+  margin: 0 0 20px 0;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .terms-content p {
   font-size: 16px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: #4a5568;
   margin-bottom: 20px;
+  font-weight: 400;
+}
+
+.contact-info {
+  background: #f8fafc;
+  padding: 20px;
+  border-radius: 12px;
+  border-left: 4px solid #1976d2;
+  margin-top: 15px;
+}
+
+.contact-info p {
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.contact-info p:last-child {
+  margin-bottom: 0;
 }
 
 .terms-content ul {
@@ -62,65 +105,89 @@ body {
 }
 
 .terms-content li::before {
-  content: "•";
-  color: #007bff; /* A blue color for the bullet points */
+  content: "✓";
+  color: #1976d2;
   font-weight: bold;
   display: inline-block;
   width: 1em;
   margin-left: -1em;
+  font-size: 14px;
 }
 
 .terms-footer {
-  margin-top: 40px;
+  margin-top: 60px;
   display: flex;
-  gap: 15px;
+  gap: 20px;
+  justify-content: center;
+  padding-top: 30px;
+  border-top: 2px solid #e2e8f0;
 }
 
 .terms-footer button {
-  padding: 12px 24px;
+  padding: 16px 32px;
   font-size: 16px;
-  font-weight: bold;
+  font-weight: 600;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
-  transition: background-color 0.3s ease, color 0.3s ease;
+  transition: all 0.3s ease;
+  min-width: 160px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .button-not-now {
-  background-color: #e2e8f0; /* light gray-blue background */
-  color: #4a5568;
-  border: 1px solid #cbd5e0;
+  background-color: #f1f5f9;
+  color: #64748b;
+  border: 2px solid #e2e8f0;
 }
 
 .button-not-now:hover {
-  background-color: #c0c3c6; /* slightly darker on hover */
+  background-color: #e2e8f0;
+  color: #475569;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 .button-agree {
-  background-color: #007bff;
+  background: linear-gradient(135deg, #1976d2, #1565c0);
   color: #ffffff;
-  border: 1px solid #007bff;
+  border: 2px solid #1976d2;
+  box-shadow: 0 4px 12px rgba(25, 118, 210, 0.3);
 }
 
 .button-agree:hover {
-  background-color: #0056b3;
+  background: linear-gradient(135deg, #1565c0, #0d47a1);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(25, 118, 210, 0.4);
 }
 
 @media (max-width: 768px) {
   .terms-container {
-    padding: 20px;
-    margin-top: 20px;
+    padding: 30px 20px;
+    margin: 20px;
+    border-radius: 12px;
   }
 
   .terms-header h1 {
-    font-size: 28px;
+    font-size: 32px;
+  }
+
+  .terms-section h2 {
+    font-size: 20px;
   }
 
   .terms-footer {
     flex-direction: column;
+    gap: 15px;
   }
 
   .terms-footer button {
     width: 100%;
+    padding: 14px 24px;
+  }
+
+  .contact-info {
+    padding: 15px;
   }
 }

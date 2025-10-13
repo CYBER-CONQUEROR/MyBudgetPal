@@ -1,4 +1,5 @@
 // src/pages/bank.js
+import { Clock, CheckCircle2, Pencil, Trash2, CalendarDays, Banknote } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/api.js";
 import jsPDF from "jspdf";
@@ -116,14 +117,53 @@ function Modal({ open, onClose, title, children, wide = false }) {
   );
 }
 
-function Bar({ value, max, hard = false }) {
-  const pct = max > 0 ? (value / max) : 0;
-  const w = `${clamp01(pct) * 100}%`;
-  const color = pct <= 0.85 ? "bg-emerald-500" : pct <= 1 ? "bg-amber-500" : "bg-rose-500";
-  const ring = hard && pct > 1 ? "ring-2 ring-rose-400" : "";
+function Bar({ value = 0, max = 0, hard = false }) {
+  const pct = Math.max(0, Math.min(100, max > 0 ? (value / max) * 100 : 0));
+  const [w, setW] = React.useState(0);
+
+  // Animate on mount & when "value/max" changes
+  React.useEffect(() => {
+    // Start at 0, then jump to target on next frame
+    setW(0);
+    const id = requestAnimationFrame(() => setW(pct));
+    return () => cancelAnimationFrame(id);
+  }, [pct]);
+
+  const over = max > 0 && value > max;
+
   return (
-    <div className={`h-2 w-full rounded-full bg-slate-200 overflow-hidden ${ring}`}>
-      <div className={`h-full ${color}`} style={{ width: w }} />
+    <div className="relative h-3 rounded-full bg-slate-100 overflow-hidden">
+      {/* Fill */}
+      <div
+        className={[
+          "h-full rounded-full",
+          "transition-[width] duration-700 ease-out",
+          "motion-reduce:transition-none",
+          over
+            ? "bg-rose-500"
+            : hard
+              ? "bg-sky-500"
+              : "bg-emerald-500",
+        ].join(" ")}
+        style={{ width: `${w}%` }}
+        aria-hidden
+      />
+
+      {/* Subtle hard-cap hatch overlay */}
+      {hard && (
+        <div
+          className="pointer-events-none absolute inset-0 rounded-full"
+          aria-hidden
+          style={{
+            // light hatch pattern; very subtle
+            background:
+              "repeating-linear-gradient(45deg, transparent 0 8px, rgba(255,255,255,.5) 8px 16px)",
+          }}
+        />
+      )}
+
+      {/* A11y text */}
+      <span className="sr-only">{Math.round(pct)}% of cap used</span>
     </div>
   );
 }
@@ -272,6 +312,12 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
   const now = new Date();
 
   /* =========================
+     Limits
+     ========================= */
+  const MAX_AMOUNT_CENTS = 9_999_999 * 100; // 9,999,999.00 -> 999,999,900
+  const MAX_INTERVAL = 12;
+
+  /* =========================
      Tiny inline message bubble
      ========================= */
   const Bubble = ({ show, message }) => (
@@ -305,16 +351,29 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     const dt = (d instanceof Date) ? d : new Date(d);
     return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
   };
+  // Parse "YYYY-MM-DD" as LOCAL time
+  const parseYmd = (s) => {
+    if (!s) return null;
+    const [Y, M, D] = String(s).split("-").map(Number);
+    if (!Y || !M || !D) return null;
+    return new Date(Y, M - 1, D);
+  };
 
+  // month boundaries (local)
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
-  const last  = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const nextLast = new Date(now.getFullYear(), now.getMonth() + 2, 0); // end of next month
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
   const minThisMonth = ymd(first);
   const maxThisMonth = ymd(last);
+  const maxNextMonth = ymd(nextLast);
+  const todayYmd = ymd(today);
 
-  // Format numeric string with comma grouping; optionally keep a trailing dot while typing.
+  // Amount formatting
   const formatCommas = (s, keepTrailingDot = false) => {
     if (!s) return "";
-    s = s.replace(/[^0-9.]/g, ""); // keep digits and dot
+    s = s.replace(/[^0-9.]/g, "");
     const parts = s.split(".");
     const intP = (parts[0] ?? "0");
     const decP = (parts[1] ?? "");
@@ -323,25 +382,8 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     if (keepTrailingDot) return `${withCommas}.`;
     return decP !== "" ? `${withCommas}.${decP}` : withCommas;
   };
-
   const cleanAmount = (s) => (s || "").replace(/,/g, "");
-
-  // Valid positive money with up to 2 decimals
   const moneyRegex = /^\d{0,15}(\.\d{0,2})?$/;
-
-  const clampToThisMonth = (value, fieldKey, label) => {
-    const v = new Date(value);
-    if (isNaN(v)) return value;
-    if (v < first) {
-      showBubble(fieldKey, `${label} must be within this month.`);
-      return ymd(first);
-    }
-    if (v > last) {
-      showBubble(fieldKey, `${label} must be within this month.`);
-      return ymd(last);
-    }
-    return ymd(v);
-  };
 
   const moneyToCents = (s) => {
     const raw = cleanAmount(s);
@@ -349,6 +391,15 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     const [i, d = ""] = raw.split(".");
     const dec = d.padEnd(2, "0").slice(0, 2);
     return (Number(i || "0") * 100) + Number(dec || "0");
+  };
+
+  const clampAmountToMax = (raw) => {
+    const cents = moneyToCents(raw);
+    if (cents > MAX_AMOUNT_CENTS) {
+      showBubble("amount", "Maximum is LKR 9,999,999.00");
+      return "9,999,999.00";
+    }
+    return null; // no clamp needed
   };
 
   const setRecurrence = (patch) =>
@@ -396,7 +447,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
         isRecurring: !!initial.isRecurring,
         recurrence: {
           frequency: rec.frequency || "monthly",
-          interval: rec.interval || 1,
+          interval: Math.min(MAX_INTERVAL, rec.interval || 1),
           startDate: ymd(rec.startDate || initial.dueDate || now),
           byWeekday: Array.isArray(rec.byWeekday) ? rec.byWeekday : [],
           byMonthDay: Array.isArray(rec.byMonthDay) ? rec.byMonthDay : [],
@@ -454,7 +505,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     }
   };
 
-  // AMOUNT — allow decimals after digits, keep trailing dot while typing, limit to 2 decimal digits.
+  // Amount
   const onAmountKeyDown = (e) => {
     if (["-", "e", "E", "+"].includes(e.key)) {
       e.preventDefault();
@@ -467,52 +518,115 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     if (!moneyRegex.test(raw)) {
       e.preventDefault();
       showBubble("amount", "Invalid amount format.");
+      return;
+    }
+    const clamped = clampAmountToMax(raw);
+    if (clamped !== null) {
+      e.preventDefault();
+      setF({ ...f, amount: formatCommas(clamped) });
     }
   };
   const onAmountChange = (e) => {
     const raw = cleanAmount(e.target.value);
-
-    // empty → allow
     if (raw === "") { setF({ ...f, amount: "" }); return; }
-
-    // allow only digits and at most one dot
     if (!/^\d*\.?\d*$/.test(raw)) { showBubble("amount", "Only digits and one dot."); return; }
-
-    // cannot start with a dot
     if (raw.startsWith(".")) { showBubble("amount", "Start with a number (e.g., 0.50)."); return; }
-
-    // if decimals present, max 2
     const [intPart, decPart = ""] = raw.split(".");
     if (decPart.length > 2) { showBubble("amount", "Up to 2 decimal places only."); return; }
 
-    // positivity already guaranteed by regex + no '-'
+    // Clamp to 9,999,999.00 if user exceeds
+    const centsCandidate = moneyToCents(raw);
+    if (centsCandidate > MAX_AMOUNT_CENTS) {
+      setF({ ...f, amount: "9,999,999.00" });
+      showBubble("amount", "Maximum is LKR 9,999,999.00");
+      return;
+    }
 
-    // keep a trailing dot while typing "123."
     const keepDot = raw.endsWith(".") && raw.includes(".") && decPart.length === 0;
-
     setF({ ...f, amount: formatCommas(raw, keepDot) });
   };
   const onAmountBlur = () => {
     const raw = cleanAmount(f.amount);
     if (!raw) return;
+
+    // normalize to two decimals
     let [i = "0", d = ""] = raw.split(".");
     if (d.length === 0) d = "00";
     else if (d.length === 1) d = d + "0";
-    const fixed = `${String(Number(i)).replace(/^0+(?=\d)/, "") || "0"}.${d.slice(0, 2)}`;
+    let fixed = `${String(Number(i)).replace(/^0+(?=\d)/, "") || "0"}.${d.slice(0, 2)}`;
+
+    // final clamp check
+    const clamped = clampAmountToMax(fixed);
+    if (clamped !== null) {
+      fixed = clamped;
+    }
+
     setF((prev) => ({ ...prev, amount: formatCommas(fixed) }));
   };
 
-  const onDueChange = (e) => {
-    const clamped = clampToThisMonth(e.target.value, "dueDate", "Due date");
-    setF({ ...f, dueDate: clamped });
-  };
+  // === Dates ===
+
+  // Paid at: within this month AND not in future (<= today)
   const onPaidAtChange = (e) => {
-    const clamped = clampToThisMonth(e.target.value, "paidAt", "Paid at");
-    setF({ ...f, paidAt: clamped });
+    const d = parseYmd(e.target.value);
+    if (!d) return;
+    if (d < first) {
+      showBubble("paidAt", "Paid date must be within this month.");
+      setF({ ...f, paidAt: ymd(first) });
+      return;
+    }
+    if (d > today) {
+      showBubble("paidAt", "Paid date can't be in the future.");
+      setF({ ...f, paidAt: todayYmd });
+      return;
+    }
+    setF({ ...f, paidAt: ymd(d) });
   };
+
+  // Due date (pending): >= today AND <= end of next month
+  const onDueChange = (e) => {
+    const d = parseYmd(e.target.value);
+    if (!d) return;
+    if (d < today) {
+      showBubble("dueDate", "Due date can't be in the past.");
+      setF({ ...f, dueDate: todayYmd });
+      return;
+    }
+    if (d > nextLast) {
+      showBubble("dueDate", "Due date must be within this or next month.");
+      setF({ ...f, dueDate: maxNextMonth });
+      return;
+    }
+    setF({ ...f, dueDate: ymd(d) });
+  };
+
+  // Start date: must be within this month
   const onStartDateChange = (e) => {
-    const clamped = clampToThisMonth(e.target.value, "startDate", "Start date");
-    setRecurrence({ startDate: clamped });
+    const d = parseYmd(e.target.value);
+    if (!d) return;
+    if (d < first) {
+      showBubble("startDate", "Start date must be within this month.");
+      setRecurrence({ startDate: minThisMonth });
+      return;
+    }
+    if (d > last) {
+      showBubble("startDate", "Start date must be within this month.");
+      setRecurrence({ startDate: maxThisMonth });
+      return;
+    }
+    setRecurrence({ startDate: ymd(d) });
+  };
+
+  // End date ("Ends → On"): must be today or future; can be in other months
+  const onEndDateChange = (e) => {
+    const d = parseYmd(e.target.value);
+    if (!d) return;
+    if (d < today) {
+      showBubble("endDate", "End date must be today or a future date.");
+      setF({ ...f, endDate: todayYmd });
+      return;
+    }
+    setF({ ...f, endDate: ymd(d) });
   };
 
   const blockNonPositiveIntKeys = (e, keyName) => {
@@ -524,7 +638,12 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
   const onIntervalChange = (e) => {
     const v = e.target.value.replace(/[^\d]/g, "");
     if (v === "") { setRecurrence({ interval: "" }); return; }
-    setRecurrence({ interval: Math.max(1, parseInt(v, 10)) });
+    let n = Math.max(1, parseInt(v, 10));
+    if (n > MAX_INTERVAL) {
+      n = MAX_INTERVAL;
+      showBubble("interval", "Maximum interval is 12");
+    }
+    setRecurrence({ interval: n });
   };
   const onRemainingChange = (e) => {
     const v = e.target.value.replace(/[^\d]/g, "");
@@ -546,22 +665,36 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
       showBubble("amount", "Enter a positive amount with up to 2 decimals.");
       return;
     }
-
-    const mainDateStr = f.status === "paid" ? f.paidAt : f.dueDate;
-    const mainDate = new Date(mainDateStr);
-    if (isNaN(mainDate) || mainDate < first || mainDate > last) {
-      showBubble(f.status === "paid" ? "paidAt" : "dueDate", "Date must be within this month.");
+    if (moneyToCents(f.amount) > MAX_AMOUNT_CENTS) {
+      showBubble("amount", "Maximum is LKR 9,999,999.00");
+      setF((prev) => ({ ...prev, amount: "9,999,999.00" }));
       return;
     }
 
+    // Re-validate selected dates with new rules
+    if (f.status === "paid") {
+      const d = parseYmd(f.paidAt || todayYmd);
+      if (!d || d < first || d > today) {
+        showBubble("paidAt", "Paid date must be this month and not in the future.");
+        return;
+      }
+    } else {
+      const d = parseYmd(f.dueDate || todayYmd);
+      if (!d || d < today || d > nextLast) {
+        showBubble("dueDate", "Due date must be within this or next month and not in the past.");
+        return;
+      }
+    }
+
     if (f.isRecurring) {
-      const sd = new Date(f.recurrence.startDate);
-      if (isNaN(sd) || sd < first || sd > last) {
+      const sd = parseYmd(f.recurrence.startDate);
+      if (!sd || sd < first || sd > last) {
         showBubble("startDate", "Start date must be within this month.");
         return;
       }
-      if (!Number.isInteger(Number(f.recurrence.interval)) || Number(f.recurrence.interval) < 1) {
-        showBubble("interval", "Interval must be a positive whole number.");
+      const intervalNum = Number(f.recurrence.interval);
+      if (!Number.isInteger(intervalNum) || intervalNum < 1 || intervalNum > MAX_INTERVAL) {
+        showBubble("interval", "Interval must be 1–12.");
         return;
       }
       if (f.endChoice === "count") {
@@ -571,9 +704,9 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
         }
       }
       if (f.endChoice === "date" && f.endDate) {
-        const ed = new Date(f.endDate);
-        if (isNaN(ed)) {
-          showBubble("endDate", "Enter a valid end date.");
+        const ed = parseYmd(f.endDate);
+        if (!ed || ed < today) {
+          showBubble("endDate", "End date must be today or a future date.");
           return;
         }
       }
@@ -594,18 +727,18 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
       category: f.category,
       amountCents: moneyToCents(f.amount),
       currency: f.currency,
-      dueDate: new Date(f.dueDate),
+      dueDate: parseYmd(f.dueDate) || new Date(f.dueDate),
       status: f.status,
-      paidAt: f.status === "paid" && f.paidAt ? new Date(f.paidAt) : undefined,
+      paidAt: f.status === "paid" && f.paidAt ? (parseYmd(f.paidAt) || new Date(f.paidAt)) : undefined,
       isRecurring: f.isRecurring,
       recurrence: f.isRecurring ? {
         frequency: f.recurrence.frequency,
         interval: Number(f.recurrence.interval || 1),
-        startDate: new Date(f.recurrence.startDate || f.dueDate),
+        startDate: parseYmd(f.recurrence.startDate) || new Date(f.recurrence.startDate || f.dueDate),
         byWeekday: f.recurrence.byWeekday,
         byMonthDay: f.recurrence.byMonthDay,
         ...(f.endChoice === "count" ? { remaining: Number(f.remaining || 0) } : {}),
-        ...(f.endChoice === "date" ? { endDate: f.endDate ? new Date(f.endDate) : undefined } : {}),
+        ...(f.endChoice === "date" ? { endDate: f.endDate ? (parseYmd(f.endDate) || new Date(f.endDate)) : undefined } : {}),
       } : undefined,
     });
   };
@@ -676,7 +809,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
               />
               <Bubble show={bubble.key === "amount"} message={bubble.msg} />
               <p className="text-xs text-slate-500 mt-1">
-                Positive number, comma-grouped, up to 2 decimals. (Auto-adds decimals on blur.)
+                Positive number (max LKR 9,999,999.00), comma-grouped, up to 2 decimals. (Auto-adds decimals on blur.)
               </p>
             </div>
           </Field>
@@ -700,9 +833,9 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                 <input
                   type="date"
                   className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                  value={f.paidAt || ymd(now)}
+                  value={f.paidAt || todayYmd}
                   min={minThisMonth}
-                  max={maxThisMonth}
+                  max={todayYmd}
                   onChange={onPaidAtChange}
                 />
                 <Bubble show={bubble.key === "paidAt"} message={bubble.msg} />
@@ -715,8 +848,8 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                   type="date"
                   className="w-full rounded-xl border border-slate-300 px-3 py-2"
                   value={f.dueDate}
-                  min={minThisMonth}
-                  max={maxThisMonth}
+                  min={todayYmd}
+                  max={maxNextMonth}
                   onChange={onDueChange}
                 />
                 <Bubble show={bubble.key === "dueDate"} message={bubble.msg} />
@@ -766,6 +899,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                   <input
                     type="number"
                     min="1"
+                    max={MAX_INTERVAL}
                     step="1"
                     className="w-full rounded-xl border border-slate-300 px-3 py-2"
                     value={f.recurrence.interval}
@@ -862,9 +996,8 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
                         type="date"
                         className="rounded-xl border border-slate-300 px-3 py-2 disabled:bg-slate-100"
                         value={f.endDate}
-                        min={minThisMonth}
-                        max={maxThisMonth}
-                        onChange={(e) => setF({ ...f, endDate: e.target.value })}
+                        min={todayYmd}
+                        onChange={onEndDateChange}
                       />
                       <Bubble show={bubble.key === "endDate"} message={bubble.msg} />
                     </div>
@@ -889,6 +1022,7 @@ function CommitmentForm({ open, onClose, onSave, accounts, initial, periodPlan }
     </Modal>
   );
 }
+
 
 /* ===================== Page ===================== */
 export default function BankCommitmentsPage() {
@@ -981,12 +1115,11 @@ export default function BankCommitmentsPage() {
   const currentFilters = { ...filters, accountName: filters.accountId ? accName(filters.accountId) : "All Accounts" };
 
   return (
-    <div className="min-h-screen bg-slate-50 py-8">
+    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900 py-8">
       <div className="mx-auto max-w-6xl px-4">
         <header className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Bank Commitments</h1>
-            <p className="text-slate-500 text-sm">Client-side reporting via jsPDF.</p>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">Bank Commitments</h1>
           </div>
           <div className="flex gap-2">
             <button className="px-4 py-2 rounded-xl border border-slate-300" onClick={() => setReportOpen(true)}>
@@ -1066,43 +1199,88 @@ export default function BankCommitmentsPage() {
         </div>
 
         {/* Lists & table (kept) */}
-        <section className="mb-6">
-          <h2 className="text-lg font-semibold mb-2">Upcoming</h2>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {upcoming.length === 0 && <div className="text-slate-500">No upcoming payments.</div>}
+        <section className="mb-8">
+          <h2 className="text-lg font-semibold mb-3 flex items-center gap-2 text-slate-700">
+            <Clock className="w-5 h-5 text-orange-500" />
+            Upcoming
+          </h2>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {upcoming.length === 0 && (
+              <div className="text-slate-500 italic">No upcoming payments.</div>
+            )}
             {upcoming.map((t) => (
-              <div key={t._id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="font-medium">{accName(t.accountId)}</div>
-                  <span className="px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700">Pending</span>
+              <div
+                key={t._id}
+                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md transition"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-medium text-slate-800 flex items-center gap-2">
+                    <Banknote className="w-4 h-4 text-slate-500" />
+                    {accName(t.accountId)}
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700">
+                    Pending
+                  </span>
                 </div>
-                <div className="text-slate-800">{t.name}</div>
-                <div className="text-slate-600 text-sm flex gap-2">
+
+                <div className="text-slate-900 font-medium">{t.name}</div>
+                <div className="text-slate-600 text-sm flex items-center gap-2 mt-1">
                   <span>{LKR.format((t.amountCents || 0) / 100)}</span>
                   <span>•</span>
-                  <span>{new Date(t.dueDate).toLocaleDateString()}</span>
+                  <div className="flex items-center gap-1">
+                    <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+                    {new Date(t.dueDate).toLocaleDateString()}
+                  </div>
                 </div>
-                <div className="mt-3 flex justify-end gap-2 text-sm">
-                  <button className="px-3 py-1 rounded-xl border" onClick={() => { setEditing(t); setOpen(true); }}>Edit</button>
-                  <button className="px-3 py-1 rounded-xl border border-red-300 text-red-600" onClick={() => onDelete(t._id)}>Delete</button>
+
+                <div className="mt-4 flex justify-end gap-2 text-sm">
+                  <button
+                    className="flex items-center gap-1 px-3 py-1 rounded-xl border hover:bg-slate-50"
+                    onClick={() => {
+                      setEditing(t);
+                      setOpen(true);
+                    }}
+                  >
+                    <Pencil className="w-4 h-4" /> Edit
+                  </button>
+                  <button
+                    className="flex items-center gap-1 px-3 py-1 rounded-xl border border-red-300 text-red-600 hover:bg-red-50"
+                    onClick={() => onDelete(t._id)}
+                  >
+                    <Trash2 className="w-4 h-4" /> Delete
+                  </button>
                 </div>
               </div>
             ))}
           </div>
         </section>
 
-        <section className="mb-6">
-          <h2 className="text-lg font-semibold mb-2">Completed</h2>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {paid.length === 0 && <div className="text-slate-500">No completed payments.</div>}
+        <section className="mb-8">
+          <h2 className="text-lg font-semibold mb-3 flex items-center gap-2 text-slate-700">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+            Completed
+          </h2>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {paid.length === 0 && (
+              <div className="text-slate-500 italic">No completed payments.</div>
+            )}
             {paid.map((t) => (
-              <div key={t._id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="font-medium">{accName(t.accountId)}</div>
-                  <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">Paid</span>
+              <div
+                key={t._id}
+                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md transition"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-medium text-slate-800 flex items-center gap-2">
+                    <Banknote className="w-4 h-4 text-slate-500" />
+                    {accName(t.accountId)}
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">
+                    Paid
+                  </span>
                 </div>
-                <div className="text-slate-800">{t.name}</div>
-                <div className="text-slate-600 text-sm flex gap-2">
+
+                <div className="text-slate-900 font-medium">{t.name}</div>
+                <div className="text-slate-600 text-sm flex items-center gap-2 mt-1">
                   <span>{LKR.format((t.amountCents || 0) / 100)}</span>
                   <span>•</span>
                   <span>
@@ -1110,19 +1288,38 @@ export default function BankCommitmentsPage() {
                     {t.dueDate ? <> • Due {formatDate(t.dueDate)}</> : null}
                   </span>
                 </div>
-                <div className="mt-3 flex justify-end gap-2 text-sm">
-                  <button className="px-3 py-1 rounded-xl border" onClick={() => { setEditing(t); setOpen(true); }}>Edit</button>
-                  <button className="px-3 py-1 rounded-xl border border-red-300 text-red-600" onClick={() => onDelete(t._id)}>Delete</button>
+
+                <div className="mt-4 flex justify-end gap-2 text-sm">
+                  <button
+                    className="flex items-center gap-1 px-3 py-1 rounded-xl border hover:bg-slate-50"
+                    onClick={() => {
+                      setEditing(t);
+                      setOpen(true);
+                    }}
+                  >
+                    <Pencil className="w-4 h-4" /> Edit
+                  </button>
+                  <button
+                    className="flex items-center gap-1 px-3 py-1 rounded-xl border border-red-300 text-red-600 hover:bg-red-50"
+                    onClick={() => onDelete(t._id)}
+                  >
+                    <Trash2 className="w-4 h-4" /> Delete
+                  </button>
                 </div>
               </div>
             ))}
           </div>
         </section>
 
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          {err && <div className="p-3 bg-red-50 text-red-700 text-sm">{err}</div>}
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          {err && (
+            <div className="p-3 bg-red-50 text-red-700 text-sm rounded-t-2xl border-b border-red-200">
+              {err}
+            </div>
+          )}
+
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600">
+            <thead className="bg-slate-200 text-slate-900">
               <tr>
                 <th className="px-3 py-2 text-left">Date</th>
                 <th className="px-3 py-2 text-left">Name</th>
@@ -1133,21 +1330,61 @@ export default function BankCommitmentsPage() {
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
+
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-500">No commitments</td></tr>
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="px-3 py-6 text-center text-slate-500 italic"
+                  >
+                    No commitments
+                  </td>
+                </tr>
               ) : (
                 filtered.map((t) => (
-                  <tr key={t._id} className="border-t">
-                    <td className="px-3 py-2">{formatDate(t.status === "paid" ? (t.paidAt || t.dueDate) : t.dueDate)}</td>
-                    <td className="px-3 py-2">{t.name}</td>
+                  <tr
+                    key={t._id}
+                    className="border-t hover:bg-slate-50 transition-colors"
+                  >
+                    <td className="px-3 py-2">
+                      {formatDate(
+                        t.status === "paid" ? (t.paidAt || t.dueDate) : t.dueDate
+                      )}
+                    </td>
+                    <td className="px-3 py-2 font-medium text-slate-800">{t.name}</td>
                     <td className="px-3 py-2">{t.category}</td>
                     <td className="px-3 py-2">{accName(t.accountId)}</td>
-                    <td className="px-3 py-2 text-right">{LKR.format((t.amountCents || 0) / 100)}</td>
-                    <td className="px-3 py-2">{t.status}</td>
-                    <td className="px-3 py-2 text-right">
-                      <button className="text-blue-600 hover:underline mr-3" onClick={() => { setEditing(t); setOpen(true); }}>Edit</button>
-                      <button className="text-red-600 hover:underline" onClick={() => onDelete(t._id)}>Delete</button>
+                    <td className="px-3 py-2 text-right font-semibold">
+                      {LKR.format((t.amountCents || 0) / 100)}
+                    </td>
+                    <td className="px-3 py-2">
+                      {t.status === "paid" ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">
+                          <CheckCircle2 className="w-3 h-3" /> Paid
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700">
+                          <Clock className="w-3 h-3" /> Pending
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right flex justify-end gap-2">
+                      <button
+                        className="flex items-center gap-1 text-blue-600 hover:text-blue-800"
+                        onClick={() => {
+                          setEditing(t);
+                          setOpen(true);
+                        }}
+                      >
+                        <Pencil className="w-4 h-4" /> Edit
+                      </button>
+                      <button
+                        className="flex items-center gap-1 text-red-600 hover:text-red-800"
+                        onClick={() => onDelete(t._id)}
+                      >
+                        <Trash2 className="w-4 h-4" /> Delete
+                      </button>
                     </td>
                   </tr>
                 ))

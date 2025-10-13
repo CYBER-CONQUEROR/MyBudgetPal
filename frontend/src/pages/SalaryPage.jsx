@@ -157,7 +157,7 @@ export default function SalaryPage() {
       <div className="max-w-6xl mx-auto px-4 md:px-6 py-8">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-emerald-700 to-teal-600">
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">
               Income
             </h1>
             <p className="text-slate-600 mt-1">Record money coming in and keep account balances in sync.</p>

@@ -1,5 +1,5 @@
 // = FILE: frontend/src/pages/SavingsGoalsPage.jsx =
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback,useRef  } from "react";
 import axios from "axios";
 import {
   RadialBarChart,
@@ -238,25 +238,330 @@ const GoalRadial = ({ savedCents, targetCents }) => (
 
 /* ------------------------- Forms ------------------------- */
 function GoalForm({ open, onClose, onSave, initial }) {
+  /* =========================
+     Limits & helpers
+     ========================= */
+  const MAX_INT_DIGITS = 7; // 9,999,999
+  const MAX_AMOUNT_CENTS = 999999999; // 9,999,999.99
+  const today = new Date();
+  const twoYearsFromToday = new Date(today.getFullYear() + 2, today.getMonth(), today.getDate());
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const minDeadline = ymd(today);
+  const maxDeadline = ymd(twoYearsFromToday);
+
+  const formatCommas = (raw, keepTrailingDot = false) => {
+    if (!raw) return "";
+    const s = String(raw).replace(/[^0-9.]/g, "");
+    const [intP = "0", decP = ""] = s.split(".");
+    const intClean = (intP || "0").replace(/^0+(?=\d)/, "") || "0";
+    const withCommas = intClean.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    if (keepTrailingDot) return `${withCommas}.`;
+    return decP !== "" ? `${withCommas}.${decP}` : withCommas;
+  };
+  const cleanAmount = (s) => (s || "").replace(/,/g, "");
+  const moneyToCents = (s) => {
+    const raw = cleanAmount(s);
+    if (!raw) return 0;
+    const [i = "0", d = ""] = raw.split(".");
+    if (!/^\d+$/.test(i)) return 0;
+    if (d && !/^\d{1,2}$/.test(d)) return 0;
+    return Number(i) * 100 + Number(d.padEnd(2, "0").slice(0, 2) || 0);
+  };
+  const fromCentsSafe = (cents) => {
+    if (typeof fromCents === "function") return fromCents(cents);
+    return (Number(cents || 0) / 100).toFixed(2);
+  };
+  const toCentsSafe = (str) => {
+    if (typeof toCents === "function") return toCents(str);
+    return moneyToCents(str);
+  };
+
+  /* =========================
+     Bubble (inline messages)
+     ========================= */
+  const Bubble = ({ show, message }) => (
+    <div
+      className={
+        "pointer-events-none absolute left-0 top-[100%] mt-1 text-xs rounded-lg " +
+        "bg-rose-50 text-rose-700 border border-rose-300 px-2 py-1 shadow-sm " +
+        "transition-opacity duration-150 " + (show ? "opacity-100" : "opacity-0")
+      }
+      role="status"
+      aria-live="polite"
+    >
+      {message}
+    </div>
+  );
+  const bubbleTimerRef = useRef(null);
+  const [bubble, setBubble] = useState({ key: null, msg: "" });
+  const showBubble = (key, msg, ms = 1600) => {
+    if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
+    setBubble({ key, msg });
+    bubbleTimerRef.current = setTimeout(() => setBubble({ key: null, msg: "" }), ms);
+  };
+
+  /* =========================
+     State
+     ========================= */
   const [f, setF] = useState({ _id: null, name: "", target: "", deadline: "", priority: "medium" });
+
   useEffect(() => {
     if (!open) return;
-    if (initial) setF({
-      _id: initial._id,
-      name: initial.name,
-      target: fromCents(initial.targetCents),
-      deadline: initial.deadline ? initial.deadline.slice(0,10) : "",
-      priority: initial.priority || "medium",
-    });
-    else setF({ _id: null, name: "", target: "", deadline: "", priority: "medium" });
+    if (initial) {
+      const val = fromCentsSafe(initial.targetCents || 0); // "1234.56"
+      setF({
+        _id: initial._id,
+        name: initial.name || "",
+        target: formatCommas(val),
+        deadline: initial.deadline ? initial.deadline.slice(0, 10) : "",
+        priority: initial.priority || "medium",
+      });
+    } else {
+      setF({ _id: null, name: "", target: "", deadline: "", priority: "medium" });
+    }
   }, [open, initial]);
 
+  /* =========================
+     Name: letters & spaces only
+     ========================= */
+  const onNameKeyDown = (e) => {
+    // Allow control keys
+    if (["Backspace", "Delete", "ArrowLeft", "ArrowRight", "Tab", "Home", "End"].includes(e.key)) return;
+    // Allow letters (unicode) and spaces
+    const ok = /^[\p{L}\s]$/u.test(e.key);
+    if (!ok) {
+      e.preventDefault();
+      showBubble("name", "Letters and spaces only.");
+    }
+  };
+  const onNamePaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text") || "";
+    if (!/^[\p{L}\s]*$/u.test(text)) {
+      e.preventDefault();
+      showBubble("name", "Letters and spaces only.");
+    }
+  };
+  const onNameChange = (e) => {
+    const v = e.target.value;
+    if (/^[\p{L}\s]*$/u.test(v)) setF({ ...f, name: v });
+    else showBubble("name", "Letters and spaces only.");
+  };
+
+  /* =========================
+     Target (money) input rules
+     ========================= */
+  const targetRef = useRef(null);
+
+  const clampToMaxIfNeeded = (raw) => {
+    const cents = moneyToCents(raw);
+    if (cents > MAX_AMOUNT_CENTS) {
+      showBubble("target", "Maximum is LKR 9,999,999.99");
+      return "9,999,999.99";
+    }
+    return null;
+  };
+
+  const onTargetKeyDown = (e) => {
+    // Disallow negatives, exponent, plus
+    if (["-", "e", "E", "+"].includes(e.key)) {
+      e.preventDefault();
+      showBubble("target", "Positive number only (up to 2 decimals).");
+      return;
+    }
+    if (e.key === ".") {
+      // block if first char or if dot already exists
+      const val = f.target || "";
+      const raw = cleanAmount(val);
+      if (!raw || raw.includes(".")) {
+        e.preventDefault();
+        showBubble("target", raw ? "Only one decimal point allowed." : "Cannot start with a decimal.");
+      }
+      return;
+    }
+  };
+
+  const onTargetPaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text") || "";
+    const raw = cleanAmount(text);
+
+    // Must be digits with optional single dot, not starting with dot
+    if (!/^\d+(\.\d{0,2})?$/.test(raw)) {
+      e.preventDefault();
+      showBubble("target", "Invalid amount format (up to 2 decimals).");
+      return;
+    }
+    // Clamp if exceeds max
+    const clamped = clampToMaxIfNeeded(raw);
+    if (clamped !== null) {
+      e.preventDefault();
+      setF((prev) => ({ ...prev, target: formatCommas(clamped) }));
+    }
+  };
+
+  const onTargetChange = (e) => {
+    const incoming = e.target.value;
+    const raw = cleanAmount(incoming);
+
+    if (raw === "") {
+      setF({ ...f, target: "" });
+      return;
+    }
+    // Must be digits + optional single dot
+    if (!/^\d*\.?\d*$/.test(raw)) {
+      showBubble("target", "Digits and one dot only.");
+      return;
+    }
+    // Cannot start with dot
+    if (raw.startsWith(".")) {
+      showBubble("target", "Cannot start with a decimal.");
+      return;
+    }
+
+    const [intPart = "", decPart = ""] = raw.split(".");
+    // Limit integer digits to 7
+    if (intPart.length > MAX_INT_DIGITS) {
+      setF({ ...f, target: "9,999,999.99" });
+      showBubble("target", "Maximum is LKR 9,999,999.99");
+      return;
+    }
+    // Max 2 decimal places while typing
+    if (decPart.length > 2) {
+      showBubble("target", "Up to 2 decimal places only.");
+      return;
+    }
+
+    // Clamp if numeric value exceeds max
+    const clamped = clampToMaxIfNeeded(raw);
+    if (clamped !== null) {
+      setF({ ...f, target: formatCommas(clamped) });
+      return;
+    }
+
+    const keepDot = raw.endsWith(".") && !decPart.length;
+    setF({ ...f, target: formatCommas(raw, keepDot) });
+  };
+
+  const onTargetBlur = () => {
+    const raw = cleanAmount(f.target);
+    // Validate full value; keep focus if invalid
+    const refocus = () => setTimeout(() => targetRef.current?.focus(), 0);
+
+    if (!raw) {
+      showBubble("target", "Enter a positive amount.");
+      refocus();
+      return;
+    }
+    if (raw.startsWith(".")) {
+      showBubble("target", "Cannot start with a decimal.");
+      refocus();
+      return;
+    }
+    if (!/^\d+(\.\d{1,2})?$/.test(raw) && !/^\d+$/.test(raw)) {
+      // either int, or 1–2 decimals; ".000" or 3+ decimals invalid
+      showBubble("target", "Invalid amount (use up to 2 decimals).");
+      refocus();
+      return;
+    }
+    // Disallow 3+ decimals explicitly
+    const parts = raw.split(".");
+    if (parts[1] && parts[1].length > 2) {
+      showBubble("target", "Up to 2 decimal places only.");
+      refocus();
+      return;
+    }
+    const cents = moneyToCents(raw);
+    if (cents <= 0) {
+      showBubble("target", "Amount must be positive.");
+      refocus();
+      return;
+    }
+    if (cents > MAX_AMOUNT_CENTS) {
+      setF((prev) => ({ ...prev, target: formatCommas("9,999,999.99") }));
+      showBubble("target", "Maximum is LKR 9,999,999.99");
+      refocus();
+      return;
+    }
+
+    // Normalize formatting (keep user's decimals as-is; no forced trailing zeros)
+    const [i = "0", d = ""] = raw.split(".");
+    const normalized = d === "" ? String(Number(i)) : `${String(Number(i))}.${d}`;
+    setF((prev) => ({ ...prev, target: formatCommas(normalized) }));
+  };
+
+  /* =========================
+     Deadline validation
+     ========================= */
+  const onDeadlineChange = (e) => {
+    const v = e.target.value;
+    if (!v) {
+      setF({ ...f, deadline: "" });
+      return;
+    }
+    const d = new Date(v + "T00:00:00");
+    if (d < new Date(minDeadline + "T00:00:00")) {
+      showBubble("deadline", "Deadline cannot be in the past.");
+      setF({ ...f, deadline: minDeadline });
+      return;
+    }
+    if (d > new Date(maxDeadline + "T00:00:00")) {
+      showBubble("deadline", "Max allowed is 2 years from today.");
+      setF({ ...f, deadline: maxDeadline });
+      return;
+    }
+    setF({ ...f, deadline: v });
+  };
+
+  /* =========================
+     Submit
+     ========================= */
   const submit = async (e) => {
     e.preventDefault();
-    if (!f.target) return alert("Please enter a target amount.");
+
+    // Name validation
+    if (!f.name || !/^[\p{L}\s]+$/u.test(f.name)) {
+      showBubble("name", "Enter a valid name (letters & spaces).");
+      return;
+    }
+
+    // Target validation (final)
+    const raw = cleanAmount(f.target);
+    if (!raw || raw.startsWith(".")) {
+      showBubble("target", "Enter a positive amount (cannot start with a decimal).");
+      targetRef.current?.focus();
+      return;
+    }
+    if (!/^\d+(\.\d{1,2})?$/.test(raw) && !/^\d+$/.test(raw)) {
+      showBubble("target", "Invalid amount (use up to 2 decimals).");
+      targetRef.current?.focus();
+      return;
+    }
+    const cents = moneyToCents(raw);
+    if (cents <= 0) {
+      showBubble("target", "Amount must be positive.");
+      targetRef.current?.focus();
+      return;
+    }
+    if (cents > MAX_AMOUNT_CENTS) {
+      showBubble("target", "Maximum is LKR 9,999,999.99");
+      setF((prev) => ({ ...prev, target: formatCommas("9,999,999.99") }));
+      targetRef.current?.focus();
+      return;
+    }
+
+    // Deadline range (optional)
+    if (f.deadline) {
+      const d = new Date(f.deadline + "T00:00:00");
+      if (d < new Date(minDeadline + "T00:00:00") || d > new Date(maxDeadline + "T00:00:00")) {
+        showBubble("deadline", "Deadline must be between today and 2 years from now.");
+        return;
+      }
+    }
+
     const body = {
-      name: f.name,
-      targetCents: toCents(f.target),
+      name: f.name.trim(),
+      targetCents: toCentsSafe(raw),
       deadline: f.deadline || undefined,
       priority: f.priority,
     };
@@ -264,30 +569,87 @@ function GoalForm({ open, onClose, onSave, initial }) {
     else await onSave(null, body);
   };
 
+  /* =========================
+     Render
+     ========================= */
   return (
     <Modal open={open} onClose={onClose} title={f._id ? "Edit Goal" : "Add Goal"}>
       <form onSubmit={submit} className="grid gap-4" noValidate>
         <Field label="Name" required>
-          <input className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.name} onChange={(e)=>setF({...f, name: e.target.value})} required />
+          <div className="relative">
+            <input
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.name}
+              onKeyDown={onNameKeyDown}
+              onChange={onNameChange}
+              onPaste={onNamePaste}
+              placeholder="e.g. Emergency Fund"
+              required
+            />
+            <Bubble show={bubble.key === "name"} message={bubble.msg} />
+          </div>
         </Field>
+
         <div className="grid sm:grid-cols-3 gap-4">
           <Field label="Target (LKR)" required>
-            <MoneyInput value={f.target} onChange={(v)=>setF({...f, target: v})} required />
+            <div className="relative">
+              <input
+                ref={targetRef}
+                inputMode="decimal"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                value={f.target}
+                onKeyDown={onTargetKeyDown}
+                onChange={onTargetChange}
+                onBlur={onTargetBlur}
+                placeholder="e.g. 100,000.00"
+                aria-describedby="targetHelp"
+                required
+              />
+              <Bubble show={bubble.key === "target"} message={bubble.msg} />
+              <p id="targetHelp" className="text-xs text-slate-500 mt-1">
+                Positive number (max LKR 9,999,999.99), up to 2 decimals. Automatically comma-grouped.
+              </p>
+            </div>
           </Field>
+
           <Field label="Deadline">
-            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.deadline} onChange={(e)=>setF({...f, deadline: e.target.value})} />
+            <div className="relative">
+              <input
+                type="date"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                value={f.deadline}
+                min={minDeadline}
+                max={maxDeadline}
+                onChange={onDeadlineChange}
+              />
+              <Bubble show={bubble.key === "deadline"} message={bubble.msg} />
+              <p className="text-xs text-slate-500 mt-1">
+                Choose a date from today up to 2 years ahead.
+              </p>
+            </div>
           </Field>
+
           <Field label="Priority" required>
-            <select className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.priority} onChange={(e)=>setF({...f, priority: e.target.value})}>
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.priority}
+              onChange={(e) => setF({ ...f, priority: e.target.value })}
+              required
+            >
               <option value="high">High</option>
               <option value="medium">Medium</option>
               <option value="low">Low</option>
             </select>
           </Field>
         </div>
+
         <div className="flex items-center gap-3 pt-2">
-          <button type="submit" className="px-4 py-2 rounded-xl text-white bg-indigo-600 hover:bg-indigo-700">Save</button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>Cancel</button>
+          <button type="submit" className="px-4 py-2 rounded-xl text-white bg-indigo-600 hover:bg-indigo-700">
+            Save
+          </button>
+          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+            Cancel
+          </button>
         </div>
       </form>
     </Modal>
@@ -295,51 +657,401 @@ function GoalForm({ open, onClose, onSave, initial }) {
 }
 
 function FundForm({ open, onClose, onSubmit, accounts, goal, mode = "fund" }) {
-  const [f, setF] = useState({ accountId: accounts[0]?._id || "", amount: "", note: "" });
-  useEffect(() => { if (!open) return; setF({ accountId: accounts[0]?._id || "", amount: "", note: "" }); }, [open, accounts]);
+  /* =========================
+     Currency helpers & limits
+     ========================= */
+  const MAX_AMOUNT_CENTS = 999999999; // 9,999,999.99
+  const formatCommas = (raw, keepTrailingDot = false) => {
+    if (!raw) return "";
+    const s = String(raw).replace(/[^0-9.]/g, "");
+    const [intP = "0", decP = ""] = s.split(".");
+    const intClean = (intP || "0").replace(/^0+(?=\d)/, "") || "0";
+    const withCommas = intClean.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    if (keepTrailingDot) return `${withCommas}.`;
+    return decP !== "" ? `${withCommas}.${decP}` : withCommas;
+  };
+  const cleanAmount = (s) => (s || "").replace(/,/g, "");
+  const moneyToCents = (s) => {
+    const raw = cleanAmount(s);
+    if (!raw) return 0;
+    const [i = "0", d = ""] = raw.split(".");
+    if (!/^\d+$/.test(i)) return 0;
+    if (d && !/^\d{1,2}$/.test(d)) return 0;
+    return Number(i) * 100 + Number(d.padEnd(2, "0").slice(0, 2) || 0);
+  };
+  const centsToPretty = (c) => (Number(c || 0) / 100).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const maxSevenIntDigits = (raw) => {
+    const [i = ""] = cleanAmount(raw).split(".");
+    return i.length <= 7;
+  };
 
-  const selectedAcc = accounts.find(a => a._id === f.accountId);
+  // toCents fallback (if your helper exists we reuse it)
+  const toCentsSafe = (str) => (typeof toCents === "function" ? toCents(str) : moneyToCents(str));
+
+  /* =========================
+     Bubble messages
+     ========================= */
+  const Bubble = ({ show, message }) => (
+    <div
+      className={
+        "pointer-events-none absolute left-0 top-[100%] mt-1 text-xs rounded-lg " +
+        "bg-rose-50 text-rose-700 border border-rose-300 px-2 py-1 shadow-sm " +
+        "transition-opacity duration-150 " + (show ? "opacity-100" : "opacity-0")
+      }
+      role="status"
+      aria-live="polite"
+    >
+      {message}
+    </div>
+  );
+  const bubbleTimerRef = useRef(null);
+  const [bubble, setBubble] = useState({ key: null, msg: "" });
+  const showBubble = (key, msg, ms = 1600) => {
+    if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
+    setBubble({ key, msg });
+    bubbleTimerRef.current = setTimeout(() => setBubble({ key: null, msg: "" }), ms);
+  };
+
+  /* =========================
+     State & derived
+     ========================= */
+  const [f, setF] = useState({ accountId: accounts[0]?._id || "", amount: "", note: "" });
+  useEffect(() => {
+    if (!open) return;
+    setF({ accountId: accounts[0]?._id || "", amount: "", note: "" });
+  }, [open, accounts]);
+
+  const selectedAcc = useMemo(
+    () => accounts.find(a => a._id === f.accountId),
+    [accounts, f.accountId]
+  );
+
   const balanceCents = Number(selectedAcc?.balanceCents || 0);
   const remainingCents = Math.max(0, (goal?.targetCents || 0) - (goal?.savedCents || 0));
-  const amountCents = toCents(f.amount);
+  const goalSavedCents = Number(goal?.savedCents || 0);
+
+  // Dynamic max depending on mode
+  const dynamicMaxCents = useMemo(() => {
+    if (mode === "fund") {
+      const caps = [balanceCents, remainingCents, MAX_AMOUNT_CENTS].filter((n) => Number.isFinite(n));
+      return Math.max(0, Math.min(...caps));
+    }
+    // withdraw
+    return Math.max(0, Math.min(goalSavedCents, MAX_AMOUNT_CENTS));
+  }, [mode, balanceCents, remainingCents, goalSavedCents]);
+
+  // Pretty max label (for bubble)
+  const dynamicMaxLabel = useMemo(() => `Maximum is LKR ${centsToPretty(dynamicMaxCents)}`, [dynamicMaxCents]);
+
+  // Amount input helpers
+  const amountRef = useRef(null);
+
+  // Clamp helper
+  const clampToDynamicMaxIfNeeded = (raw) => {
+    const cents = moneyToCents(raw);
+    if (cents > dynamicMaxCents) {
+      showBubble("amount", dynamicMaxLabel);
+      return (dynamicMaxCents / 100).toFixed(2); // plain string (no commas)
+    }
+    // Also enforce absolute ceiling of 9,999,999.99, in case dynamicMax is higher (shouldn’t be)
+    if (cents > MAX_AMOUNT_CENTS) {
+      showBubble("amount", "Maximum is LKR 9,999,999.99");
+      return "9,999,999.99";
+    }
+    return null;
+  };
+
+  // Re-clamp when account switches (or goal/remaining changes)
+  useEffect(() => {
+    if (!f.amount) return;
+    const raw = cleanAmount(f.amount);
+    const clamped = clampToDynamicMaxIfNeeded(raw);
+    if (clamped !== null) {
+      setF((prev) => ({ ...prev, amount: formatCommas(clamped) }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dynamicMaxCents]);
+
+  /* =========================
+     Amount field validations
+     ========================= */
+  const onAmountKeyDown = (e) => {
+    if (["-", "e", "E", "+"].includes(e.key)) {
+      e.preventDefault();
+      showBubble("amount", "Positive number only (up to 2 decimals).");
+      return;
+    }
+    if (e.key === ".") {
+      const val = f.amount || "";
+      const raw = cleanAmount(val);
+      if (!raw || raw.includes(".")) {
+        e.preventDefault();
+        showBubble("amount", raw ? "Only one decimal point allowed." : "Cannot start with a decimal.");
+      }
+      return;
+    }
+  };
+
+  const onAmountPaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text") || "";
+    const raw = cleanAmount(text);
+
+    if (!/^\d+(\.\d{0,2})?$/.test(raw)) {
+      e.preventDefault();
+      showBubble("amount", "Invalid amount format (up to 2 decimals).");
+      return;
+    }
+    if (!maxSevenIntDigits(raw)) {
+      e.preventDefault();
+      showBubble("amount", "Maximum is LKR 9,999,999.99");
+      return;
+    }
+    const clamped = clampToDynamicMaxIfNeeded(raw);
+    if (clamped !== null) {
+      e.preventDefault();
+      setF((prev) => ({ ...prev, amount: formatCommas(clamped) }));
+    }
+  };
+
+  const onAmountChange = (e) => {
+    const incoming = e.target.value;
+    const raw = cleanAmount(incoming);
+
+    if (raw === "") {
+      setF({ ...f, amount: "" });
+      return;
+    }
+    if (!/^\d*\.?\d*$/.test(raw)) {
+      showBubble("amount", "Digits and one dot only.");
+      return;
+    }
+    if (raw.startsWith(".")) {
+      showBubble("amount", "Cannot start with a decimal.");
+      return;
+    }
+    const [i = "", d = ""] = raw.split(".");
+    // Limit integer part to 7 digits (9,999,999)
+    if (i.length > 7) {
+      setF({ ...f, amount: "9,999,999.99" });
+      showBubble("amount", "Maximum is LKR 9,999,999.99");
+      return;
+    }
+    // Max 2 decimal places while typing
+    if (d.length > 2) {
+      showBubble("amount", "Up to 2 decimal places only.");
+      return;
+    }
+
+    const clamped = clampToDynamicMaxIfNeeded(raw);
+    if (clamped !== null) {
+      setF({ ...f, amount: formatCommas(clamped) });
+      return;
+    }
+
+    const keepDot = raw.endsWith(".") && d.length === 0;
+    setF({ ...f, amount: formatCommas(raw, keepDot) });
+  };
+
+  const onAmountBlur = () => {
+    const raw = cleanAmount(f.amount);
+    const refocus = () => setTimeout(() => amountRef.current?.focus(), 0);
+
+    if (!raw) {
+      showBubble("amount", "Enter a positive amount.");
+      refocus();
+      return;
+    }
+    if (raw.startsWith(".")) {
+      showBubble("amount", "Cannot start with a decimal.");
+      refocus();
+      return;
+    }
+    if (!/^\d+(\.\d{1,2})?$/.test(raw) && !/^\d+$/.test(raw)) {
+      showBubble("amount", "Invalid amount (use up to 2 decimals).");
+      refocus();
+      return;
+    }
+    const parts = raw.split(".");
+    if (parts[1] && parts[1].length > 2) {
+      showBubble("amount", "Up to 2 decimal places only.");
+      refocus();
+      return;
+    }
+    const cents = moneyToCents(raw);
+    if (cents <= 0) {
+      showBubble("amount", "Amount must be positive.");
+      refocus();
+      return;
+    }
+
+    // Dynamic cap check
+    if (cents > dynamicMaxCents) {
+      const fixed = (dynamicMaxCents / 100).toFixed(2);
+      setF((prev) => ({ ...prev, amount: formatCommas(fixed) }));
+      showBubble("amount", dynamicMaxLabel);
+      refocus();
+      return;
+    }
+    if (cents > MAX_AMOUNT_CENTS) {
+      setF((prev) => ({ ...prev, amount: formatCommas("9,999,999.99") }));
+      showBubble("amount", "Maximum is LKR 9,999,999.99");
+      refocus();
+      return;
+    }
+
+    // Normalize commas
+    const [i = "0", d = ""] = raw.split(".");
+    const normalized = d === "" ? String(Number(i)) : `${String(Number(i))}.${d}`;
+    setF((prev) => ({ ...prev, amount: formatCommas(normalized) }));
+  };
+
+  /* =========================
+     Derived flags (existing)
+     ========================= */
+  const amountCents = toCentsSafe(f.amount);
   const insufficient = mode === "fund" ? amountCents > balanceCents : false;
   const exceedsRemaining = mode === "fund" ? amountCents > remainingCents : false;
-  const exceedsGoalBalance = mode === "withdraw" ? amountCents > (goal?.savedCents || 0) : false;
+  const exceedsGoalBalance = mode === "withdraw" ? amountCents > goalSavedCents : false;
 
+  /* =========================
+     Submit
+     ========================= */
   const submit = async (e) => {
     e.preventDefault();
-    if (!f.amount) return alert("Please enter an amount.");
+
+    // Final amount checks
+    const raw = cleanAmount(f.amount);
+    if (!raw || raw.startsWith(".")) {
+      showBubble("amount", "Enter a positive amount (cannot start with a decimal).");
+      amountRef.current?.focus();
+      return;
+    }
+    if (!/^\d+(\.\d{1,2})?$/.test(raw) && !/^\d+$/.test(raw)) {
+      showBubble("amount", "Invalid amount (use up to 2 decimals).");
+      amountRef.current?.focus();
+      return;
+    }
+    const cents = moneyToCents(raw);
+    if (cents <= 0) {
+      showBubble("amount", "Amount must be positive.");
+      amountRef.current?.focus();
+      return;
+    }
+    if (cents > dynamicMaxCents) {
+      showBubble("amount", dynamicMaxLabel);
+      const fixed = (dynamicMaxCents / 100).toFixed(2);
+      setF((prev) => ({ ...prev, amount: formatCommas(fixed) }));
+      amountRef.current?.focus();
+      return;
+    }
+
+    // Keep your original guards too (UX feedback area)
     if (insufficient) return alert("Insufficient balance in selected account.");
     if (exceedsRemaining) return alert("Amount exceeds remaining to reach target.");
     if (exceedsGoalBalance) return alert("Amount exceeds goal's saved balance.");
-    await onSubmit({ accountId: f.accountId, amountCents: amountCents, note: f.note });
+
+    await onSubmit({ accountId: f.accountId, amountCents: cents, note: f.note });
   };
 
+  /* =========================
+     Render
+     ========================= */
   return (
-    <Modal open={open} onClose={onClose} title={mode === "fund" ? `Fund “${goal?.name||"Goal"}”` : `Withdraw from “${goal?.name||"Goal"}”`}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={mode === "fund" ? `Fund “${goal?.name || "Goal"}”` : `Withdraw from “${goal?.name || "Goal"}”`}
+    >
       <form onSubmit={submit} className="grid gap-4" noValidate>
         <Field label="Account" required>
-          <select className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.accountId} onChange={(e)=>setF({...f, accountId: e.target.value})}>
-            {accounts.map(a => (<option key={a._id} value={a._id}>{a.name}</option>))}
+          <select
+            className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            value={f.accountId}
+            onChange={(e) => setF({ ...f, accountId: e.target.value })}
+          >
+            {accounts.map((a) => (
+              <option key={a._id} value={a._id}>
+                {a.name}
+              </option>
+            ))}
           </select>
-          {selectedAcc && (<p className="text-xs text-slate-500 mt-1">Available: {LKR.format(balanceCents/100)}</p>)}
+          {selectedAcc && (
+            <p className="text-xs text-slate-500 mt-1">
+              Available: {typeof LKR !== "undefined"
+                ? LKR.format(balanceCents / 100)
+                : (balanceCents / 100).toLocaleString("en-LK", { style: "currency", currency: "LKR" })}
+            </p>
+          )}
         </Field>
-        <Field label={mode === "fund" ? "Amount to fund (LKR)" : "Amount to withdraw (LKR)"} required>
-          <MoneyInput value={f.amount} onChange={(v)=>setF({...f, amount: v})} required />
-          {mode === "fund" && (<p className="text-xs text-slate-500 mt-1">Remaining to target: {LKR.format(remainingCents/100)}</p>)}
-          {mode === "withdraw" && (<p className="text-xs text-slate-500 mt-1">Goal balance: {LKR.format((goal?.savedCents||0)/100)}</p>)}
+
+        <Field
+          label={mode === "fund" ? "Amount to fund (LKR)" : "Amount to withdraw (LKR)"}
+          required
+        >
+          <div className="relative">
+            <input
+              ref={amountRef}
+              inputMode="decimal"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={f.amount}
+              onKeyDown={onAmountKeyDown}
+              onChange={onAmountChange}
+              onBlur={onAmountBlur}
+              placeholder="e.g. 100,000.00"
+              aria-describedby="amountHelp"
+              required
+            />
+            <Bubble show={bubble.key === "amount"} message={bubble.msg} />
+            <p id="amountHelp" className="text-xs text-slate-500 mt-1">
+              Positive number (max {mode === "fund"
+                ? `LKR ${centsToPretty(dynamicMaxCents)}`
+                : `LKR ${centsToPretty(dynamicMaxCents)}`}), up to 2 decimals. Automatically comma-grouped.
+            </p>
+          </div>
+
+          {mode === "fund" && (
+            <p className="text-xs text-slate-500 mt-1">
+              Remaining to target: {typeof LKR !== "undefined"
+                ? LKR.format(remainingCents / 100)
+                : (remainingCents / 100).toLocaleString("en-LK", { style: "currency", currency: "LKR" })}
+            </p>
+          )}
+          {mode === "withdraw" && (
+            <p className="text-xs text-slate-500 mt-1">
+              Goal balance: {typeof LKR !== "undefined"
+                ? LKR.format(goalSavedCents / 100)
+                : (goalSavedCents / 100).toLocaleString("en-LK", { style: "currency", currency: "LKR" })}
+            </p>
+          )}
         </Field>
-        <Field label="Note"><input className="w-full rounded-xl border border-slate-300 px-3 py-2" value={f.note} onChange={(e)=>setF({...f, note: e.target.value})} /></Field>
+
+        <Field label="Note">
+          <input
+            className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            value={f.note}
+            onChange={(e) => setF({ ...f, note: e.target.value })}
+          />
+        </Field>
+
         {(insufficient || exceedsRemaining || exceedsGoalBalance) && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
             {insufficient && <div>Insufficient balance in selected account.</div>}
             {exceedsRemaining && <div>Amount exceeds remaining to reach target.</div>}
-            {exceedsGoalBalance && <div>Amount exceeds goal's saved balance.</div>}
+            {exceedsGoalBalance && <div>Amount exceeds goal&apos;s saved balance.</div>}
           </div>
         )}
+
         <div className="flex items-center gap-3 pt-2">
-          <button type="submit" className={`px-4 py-2 rounded-xl text-white ${(insufficient || exceedsRemaining || exceedsGoalBalance) ? "bg-slate-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"}`} disabled={insufficient || exceedsRemaining || exceedsGoalBalance}>{mode === "fund" ? "Fund" : "Withdraw"}</button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>Cancel</button>
+          <button
+            type="submit"
+            className={`px-4 py-2 rounded-xl text-white ${(insufficient || exceedsRemaining || exceedsGoalBalance) ? "bg-slate-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"}`}
+            disabled={insufficient || exceedsRemaining || exceedsGoalBalance}
+          >
+            {mode === "fund" ? "Fund" : "Withdraw"}
+          </button>
+          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+            Cancel
+          </button>
         </div>
       </form>
     </Modal>
@@ -364,53 +1076,91 @@ export default function SavingsGoalsPage() {
   const { start: mStart, end: mEnd } = monthBounds(now.getFullYear(), now.getMonth());
   const [budgetSavingsRupees, setBudgetSavingsRupees] = useState(null);
 
-  const load = async () => {
+  // --- NEW: debounced query value for filters.q ---
+  const [qDebounced, setQDebounced] = useState(filters.q);
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(filters.q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [filters.q]);
+
+  const load = useCallback(async () => {
     setErr("");
     try {
       const [acc, list, plan] = await Promise.all([
         Accounts.list(),
-        Goals.list({ status: filters.status, q: filters.q, priority: filters.priority }),
+        Goals.list({ status: filters.status, q: qDebounced, priority: filters.priority }),
         Budget.getPlan(period).catch(() => null),
       ]);
       setAccounts(acc);
       setGoals(list);
       setBudgetSavingsRupees(plan?.savings?.amount ?? null); // planOut returns rupees
-    } catch (e) { setErr(e?.response?.data?.detail || e.message); }
-  };
+    } catch (e) {
+      setErr(e?.response?.data?.detail || e.message);
+    }
+  }, [filters.status, filters.priority, qDebounced, period]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filters.status, filters.priority, period]);
+  // run loader whenever its deps change
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const onSaveGoal = async (id, body) => {
-    if (id) await Goals.update(id, body); else await Goals.create(body);
-    setOpenGoalForm(false); setEditing(null); await load();
+    if (id) await Goals.update(id, body);
+    else await Goals.create(body);
+    setOpenGoalForm(false);
+    setEditing(null);
+    await load();
   };
 
   const onDelete = async (id) => {
     if (!window.confirm("Delete this goal? (It must be empty.)")) return;
-    try { await Goals.remove(id); await load(); }
-    catch (e) { alert(e?.response?.data?.detail || e.message); }
+    try {
+      await Goals.remove(id);
+      await load();
+    } catch (e) {
+      alert(e?.response?.data?.detail || e.message);
+    }
   };
 
-  const openFund = (g) => { setActiveGoal(g); setFundOpen(true); };
-  const openWithdraw = (g) => { setActiveGoal(g); setWithdrawOpen(true); };
+  const openFund = (g) => {
+    setActiveGoal(g);
+    setFundOpen(true);
+  };
+  const openWithdraw = (g) => {
+    setActiveGoal(g);
+    setWithdrawOpen(true);
+  };
 
   const doFund = async ({ accountId, amountCents, note }) => {
-    try { await Goals.fund(activeGoal._id, { accountId, amountCents, note }); setFundOpen(false); setActiveGoal(null); await load(); }
-    catch (e) { alert(e?.response?.data?.detail || e.message); }
+    try {
+      await Goals.fund(activeGoal._id, { accountId, amountCents, note });
+      setFundOpen(false);
+      setActiveGoal(null);
+      await load();
+    } catch (e) {
+      alert(e?.response?.data?.detail || e.message);
+    }
   };
   const doWithdraw = async ({ accountId, amountCents, note }) => {
-    try { await Goals.withdraw(activeGoal._id, { accountId, amountCents, note }); setWithdrawOpen(false); setActiveGoal(null); await load(); }
-    catch (e) { alert(e?.response?.data?.detail || e.message); }
+    try {
+      await Goals.withdraw(activeGoal._id, { accountId, amountCents, note });
+      setWithdrawOpen(false);
+      setActiveGoal(null);
+      await load();
+    } catch (e) {
+      alert(e?.response?.data?.detail || e.message);
+    }
   };
 
-  const active = useMemo(() => goals.filter(g => !g.completed), [goals]);
-  const completed = useMemo(() => goals.filter(g => g.completed), [goals]);
+  const active = useMemo(() => goals.filter((g) => !g.completed), [goals]);
+  const completed = useMemo(() => goals.filter((g) => g.completed), [goals]);
 
   // monthly totals (NET = funds - withdrawals)
-  const { net: netMonthlyCents, inCents: monthlyInCents, outCents: monthlyOutCents } = useMemo(
-    () => sumMonthlySavingsActivity(goals, mStart, mEnd),
-    [goals, mStart, mEnd]
-  );
+  const {
+    net: netMonthlyCents,
+    inCents: monthlyInCents,
+    outCents: monthlyOutCents,
+  } = useMemo(() => sumMonthlySavingsActivity(goals, mStart, mEnd), [goals, mStart, mEnd]);
 
   // For budget usage, don't let negative withdrawals create negative usage
   const budgetCents = Number.isFinite(budgetSavingsRupees) ? toCents(budgetSavingsRupees) : 0;
@@ -421,8 +1171,9 @@ export default function SavingsGoalsPage() {
   const goalsNetThisMonth = useMemo(() => {
     const map = {};
     for (const g of goals) {
-      let inC = 0, outC = 0;
-      for (const e of (g.ledger || [])) {
+      let inC = 0,
+        outC = 0;
+      for (const e of g.ledger || []) {
         if (!e?.at) continue;
         if (!within(e.at, mStart, mEnd)) continue;
         if (e.kind === "fund") inC += Number(e.amountCents || 0);
@@ -434,16 +1185,31 @@ export default function SavingsGoalsPage() {
   }, [goals, mStart, mEnd]);
 
   return (
-    <div className="min-h-screen bg-slate-50 py-8">
+    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50">
       <div className="mx-auto max-w-6xl px-4">
         <header className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Savings Goals</h1>
-            <p className="text-slate-500 text-sm">Plan savings, fund from any account, and track against your monthly budget.</p>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600 mx-y-4">Savings Goals</h1>
+            <p className="text-slate-500 text-sm">
+              Plan savings, fund from any account, and track against your monthly budget.
+            </p>
           </div>
           <div className="flex gap-2">
-            <button className="px-3 py-2 rounded-xl border" onClick={() => generateSavingsPDF({ goals, filters, logoUrl: "/reportLogo.png" })}>Generate Report</button>
-            <button className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700" onClick={() => { setEditing(null); setOpenGoalForm(true); }}>+ Add Goal</button>
+            <button
+              className="px-3 py-2 rounded-xl border"
+              onClick={() => generateSavingsPDF({ goals, filters, logoUrl: "/reportLogo.png" })}
+            >
+              Generate Report
+            </button>
+            <button
+              className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700"
+              onClick={() => {
+                setEditing(null);
+                setOpenGoalForm(true);
+              }}
+            >
+              + Add Goal
+            </button>
           </div>
         </header>
 
@@ -451,45 +1217,83 @@ export default function SavingsGoalsPage() {
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between">
               <div>
-                <div className="text-sm text-slate-500">Savings Budget — {fmtMonth(new Date())} ({period})</div>
-                <h2 className="text-lg font-semibold text-slate-900">Budget vs This Month’s Contributions</h2>
+                <div className="text-sm text-slate-500">
+                  Savings Budget — {fmtMonth(new Date())} ({period})
+                </div>
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Budget vs This Month’s Contributions
+                </h2>
               </div>
               <div className="text-sm text-slate-500">
-                {budgetSavingsRupees != null ? <span>Budget set in <span className="font-medium">Budget Plan</span></span> : <span className="text-amber-600">No plan for this month</span>}
+                {budgetSavingsRupees != null ? (
+                  <span>
+                    Budget set in <span className="font-medium">Budget Plan</span>
+                  </span>
+                ) : (
+                  <span className="text-amber-600">No plan for this month</span>
+                )}
               </div>
             </div>
 
             <div className="grid md:grid-cols-2 gap-6 mt-4 items-center">
-              <div className="flex justify-center"><RadialProgress percent={usedPct} centerLabel="of budget" /></div>
+              <div className="flex justify-center">
+                <RadialProgress percent={usedPct} centerLabel="of budget" />
+              </div>
               <div className="space-y-3">
-                <div className="flex items-center justify-between"><span className="text-slate-600">Budgeted</span><span className="font-semibold">{budgetSavingsRupees != null ? LKR.format(Number(budgetSavingsRupees)) : "—"}</span></div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600">Budgeted</span>
+                  <span className="font-semibold">
+                    {budgetSavingsRupees != null ? LKR.format(Number(budgetSavingsRupees)) : "—"}
+                  </span>
+                </div>
 
                 <div className="flex items-center justify-between">
                   <span className="text-slate-600">Contributed this month (net)</span>
-                  <span className={`font-semibold ${netMonthlyCents < 0 ? "text-rose-600" : netMonthlyCents > 0 ? "text-emerald-700" : ""}`}>
-                    {LKR.format(netMonthlyCents/100)}
+                  <span
+                    className={`font-semibold ${
+                      netMonthlyCents < 0 ? "text-rose-600" : netMonthlyCents > 0 ? "text-emerald-700" : ""
+                    }`}
+                  >
+                    {LKR.format(netMonthlyCents / 100)}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-500">Gross in / out</span>
                   <span className="text-slate-600">
-                    {LKR.format(monthlyInCents/100)} in · {LKR.format(monthlyOutCents/100)} out
+                    {LKR.format(monthlyInCents / 100)} in · {LKR.format(monthlyOutCents / 100)} out
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <span className="text-slate-600">Remaining in budget</span>
-                  <span className={`font-semibold ${usedForBudgetCents > budgetCents ? "text-rose-600" : ""}`}>
-                    {budgetSavingsRupees != null ? LKR.format(Math.max(0, (budgetCents - usedForBudgetCents))/100) : "—"}
+                  <span
+                    className={`font-semibold ${
+                      usedForBudgetCents > budgetCents ? "text-rose-600" : ""
+                    }`}
+                  >
+                    {budgetSavingsRupees != null
+                      ? LKR.format(Math.max(0, budgetCents - usedForBudgetCents) / 100)
+                      : "—"}
                   </span>
                 </div>
 
                 <div className="h-px bg-slate-100" />
                 <div className="grid grid-cols-3 gap-3 text-sm">
-                  <div className="rounded-xl bg-slate-50 p-3 border border-slate-200"><div className="text-slate-500">Active goals</div><div className="text-slate-900 font-semibold">{active.length}</div></div>
-                  <div className="rounded-xl bg-slate-50 p-3 border border-slate-200"><div className="text-slate-500">Completed</div><div className="text-slate-900 font-semibold">{completed.length}</div></div>
-                  <div className="rounded-xl bg-slate-50 p-3 border border-slate-200"><div className="text-slate-500">Avg net / goal</div><div className="text-slate-900 font-semibold">{goals.length ? LKR.format((netMonthlyCents/100)/goals.length) : "—"}</div></div>
+                  <div className="rounded-xl bg-slate-50 p-3 border border-slate-200">
+                    <div className="text-slate-500">Active goals</div>
+                    <div className="text-slate-900 font-semibold">{active.length}</div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3 border border-slate-200">
+                    <div className="text-slate-500">Completed</div>
+                    <div className="text-slate-900 font-semibold">{completed.length}</div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3 border border-slate-200">
+                    <div className="text-slate-500">Avg net / goal</div>
+                    <div className="text-slate-900 font-semibold">
+                      {goals.length ? LKR.format((netMonthlyCents / 100) / goals.length) : "—"}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -498,12 +1302,54 @@ export default function SavingsGoalsPage() {
 
         {/* Filters */}
         <div className="grid sm:grid-cols-8 gap-3 mb-6">
-          <Field label="Status"><select className="w-full rounded-xl border border-slate-300 px-3 py-2" value={filters.status} onChange={(e)=>setFilters({...filters, status: e.target.value})}><option value="all">All</option><option value="active">Active</option><option value="completed">Completed</option></select></Field>
-          <Field label="Priority"><select className="w-full rounded-xl border border-slate-300 px-3 py-2" value={filters.priority} onChange={(e)=>setFilters({...filters, priority: e.target.value})}><option value="all">All</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></Field>
-          <div className="sm:col-span-6"><Field label="Search"><input className="w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="goal name" value={filters.q} onChange={(e)=>setFilters({...filters, q: e.target.value})} /></Field></div>
+          <Field label="Status">
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={filters.status}
+              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+            >
+              <option value="all">All</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+            </select>
+          </Field>
+
+          <Field label="Priority">
+            <select
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              value={filters.priority}
+              onChange={(e) => setFilters({ ...filters, priority: e.target.value })}
+            >
+              <option value="all">All</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </Field>
+
+          <div className="sm:col-span-6">
+            <Field label="Search">
+              <input
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                placeholder="goal name"
+                value={filters.q}
+                onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    setQDebounced(filters.q.trim()); // trigger immediate search on Enter
+                  }
+                }}
+              />
+            </Field>
+          </div>
         </div>
 
-        {err && <div className="p-3 mb-3 bg-red-50 text-red-700 text-sm rounded-xl border border-red-200">{err}</div>}
+        {err && (
+          <div className="p-3 mb-3 bg-red-50 text-red-700 text-sm rounded-xl border border-red-200">
+            {err}
+          </div>
+        )}
 
         {/* Active */}
         <section className="mb-10">
@@ -511,38 +1357,85 @@ export default function SavingsGoalsPage() {
           <div className="grid sm:grid-cols-2 gap-6">
             {active.length === 0 && <div className="text-slate-500">No active goals.</div>}
             {active.map((g) => {
-              const remaining = Math.max(0, (g.targetCents||0) - (g.savedCents||0));
+              const remaining = Math.max(0, (g.targetCents || 0) - (g.savedCents || 0));
               const agg = goalsNetThisMonth[g._id] || { net: 0, inC: 0, outC: 0 };
               return (
                 <div key={g._id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex items-start justify-between mb-3">
                     <div className="space-y-1">
                       <div className="text-lg font-semibold text-slate-900">{g.name}</div>
-                      <div className="flex items-center gap-2"><PriorityBadge priority={g.priority} /><DueBadge deadline={g.deadline} completed={g.completed} /></div>
+                      <div className="flex items-center gap-2">
+                        <PriorityBadge priority={g.priority} />
+                        <DueBadge deadline={g.deadline} completed={g.completed} />
+                      </div>
                     </div>
-                    <div className="text-sm text-slate-600">Target: <span className="font-medium">{LKR.format((g.targetCents||0)/100)}</span></div>
+                    <div className="text-sm text-slate-600">
+                      Target:{" "}
+                      <span className="font-medium">{LKR.format((g.targetCents || 0) / 100)}</span>
+                    </div>
                   </div>
                   <div className="grid md:grid-cols-2 gap-4 items-center">
-                    <div className="flex justify-center"><GoalRadial savedCents={g.savedCents} targetCents={g.targetCents} /></div>
+                    <div className="flex justify-center">
+                      <GoalRadial savedCents={g.savedCents} targetCents={g.targetCents} />
+                    </div>
                     <div className="flex-1 space-y-3">
-                      <div className="flex items-center justify-between text-sm"><span className="text-slate-600">Saved</span><span className="font-medium">{LKR.format((g.savedCents||0)/100)}</span></div>
-                      <div className="flex items-center justify-between text-sm"><span className="text-slate-600">Remaining</span><span className="font-medium">{LKR.format(remaining/100)}</span></div>
-                      {g.deadline && (<div className="text-xs text-slate-500">Deadline: {new Date(g.deadline).toLocaleDateString()}</div>)}
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-600">Saved</span>
+                        <span className="font-medium">{LKR.format((g.savedCents || 0) / 100)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-600">Remaining</span>
+                        <span className="font-medium">{LKR.format(remaining / 100)}</span>
+                      </div>
+                      {g.deadline && (
+                        <div className="text-xs text-slate-500">
+                          Deadline: {new Date(g.deadline).toLocaleDateString()}
+                        </div>
+                      )}
 
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-slate-600">Net this month</span>
-                        <span className={`font-medium ${agg.net < 0 ? "text-rose-600" : agg.net > 0 ? "text-emerald-700" : ""}`}>
-                          {LKR.format(agg.net/100)}
+                        <span
+                          className={`font-medium ${
+                            agg.net < 0 ? "text-rose-600" : agg.net > 0 ? "text-emerald-700" : ""
+                          }`}
+                        >
+                          {LKR.format(agg.net / 100)}
                         </span>
                       </div>
-                      <div className="text-xs text-slate-500 flex justify-end">({LKR.format(agg.inC/100)} in · {LKR.format(agg.outC/100)} out)</div>
+                      <div className="text-xs text-slate-500 flex justify-end">
+                        ({LKR.format(agg.inC / 100)} in · {LKR.format(agg.outC / 100)} out)
+                      </div>
 
                       <div className="h-px bg-slate-100" />
                       <div className="pt-1 flex flex-wrap gap-2">
-                        <button className="px-3 py-1.5 rounded-xl border" onClick={() => { setEditing(g); setOpenGoalForm(true); }}>Edit</button>
-                        <button className="px-3 py-1.5 rounded-xl border border-red-300 text-red-600" onClick={() => onDelete(g._id)}>Delete</button>
-                        <button className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white" onClick={() => openFund(g)}>Fund</button>
-                        <button className="px-3 py-1.5 rounded-xl bg-slate-800 text-white" onClick={() => openWithdraw(g)}>Withdraw</button>
+                        <button
+                          className="px-3 py-1.5 rounded-xl border"
+                          onClick={() => {
+                            setEditing(g);
+                            setOpenGoalForm(true);
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded-xl border border-red-300 text-red-600"
+                          onClick={() => onDelete(g._id)}
+                        >
+                          Delete
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white"
+                          onClick={() => openFund(g)}
+                        >
+                          Fund
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 text-white"
+                          onClick={() => openWithdraw(g)}
+                        >
+                          Withdraw
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -564,27 +1457,64 @@ export default function SavingsGoalsPage() {
                   <div className="flex items-start justify-between mb-3">
                     <div className="space-y-1">
                       <div className="text-lg font-semibold text-slate-900">{g.name}</div>
-                      <div className="flex items-center gap-2"><PriorityBadge priority={g.priority} /><DueBadge deadline={g.deadline} completed={g.completed} /></div>
+                      <div className="flex items-center gap-2">
+                        <PriorityBadge priority={g.priority} />
+                        <DueBadge deadline={g.deadline} completed={g.completed} />
+                      </div>
                     </div>
-                    <div className="text-sm text-slate-600">Target: <span className="font-medium">{LKR.format((g.targetCents||0)/100)}</span></div>
+                    <div className="text-sm text-slate-600">
+                      Target:{" "}
+                      <span className="font-medium">{LKR.format((g.targetCents || 0) / 100)}</span>
+                    </div>
                   </div>
                   <div className="grid md:grid-cols-2 gap-4 items-center">
-                    <div className="flex justify-center"><GoalRadial savedCents={g.savedCents} targetCents={g.targetCents} /></div>
+                    <div className="flex justify-center">
+                      <GoalRadial savedCents={g.savedCents} targetCents={g.targetCents} />
+                    </div>
                     <div className="flex-1 space-y-3">
-                      <div className="flex items-center justify-between text-sm"><span className="text-slate-600">Saved</span><span className="font-medium">{LKR.format((g.savedCents||0)/100)}</span></div>
-                      <div className="text-xs text-slate-500">Completed on: {new Date(g.updatedAt).toLocaleDateString()}</div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-600">Saved</span>
+                        <span className="font-medium">{LKR.format((g.savedCents || 0) / 100)}</span>
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        Completed on: {new Date(g.updatedAt).toLocaleDateString()}
+                      </div>
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-slate-600">Net this month</span>
-                        <span className={`font-medium ${agg.net < 0 ? "text-rose-600" : agg.net > 0 ? "text-emerald-700" : ""}`}>
-                          {LKR.format(agg.net/100)}
+                        <span
+                          className={`font-medium ${
+                            agg.net < 0 ? "text-rose-600" : agg.net > 0 ? "text-emerald-700" : ""
+                          }`}
+                        >
+                          {LKR.format(agg.net / 100)}
                         </span>
                       </div>
-                      <div className="text-xs text-slate-500 flex justify-end">({LKR.format(agg.inC/100)} in · {LKR.format(agg.outC/100)} out)</div>
+                      <div className="text-xs text-slate-500 flex justify-end">
+                        ({LKR.format(agg.inC / 100)} in · {LKR.format(agg.outC / 100)} out)
+                      </div>
                       <div className="h-px bg-slate-100" />
                       <div className="pt-1 flex flex-wrap gap-2">
-                        <button className="px-3 py-1.5 rounded-xl border" onClick={() => { setEditing(g); setOpenGoalForm(true); }}>Edit</button>
-                        <button className="px-3 py-1.5 rounded-xl border border-red-300 text-red-600" onClick={() => onDelete(g._id)}>Delete</button>
-                        <button className="px-3 py-1.5 rounded-xl bg-slate-800 text-white" onClick={() => openWithdraw(g)}>Withdraw</button>
+                        <button
+                          className="px-3 py-1.5 rounded-xl border"
+                          onClick={() => {
+                            setEditing(g);
+                            setOpenGoalForm(true);
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded-xl border border-red-300 text-red-600"
+                          onClick={() => onDelete(g._id)}
+                        >
+                          Delete
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 text-white"
+                          onClick={() => openWithdraw(g)}
+                        >
+                          Withdraw
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -595,10 +1525,37 @@ export default function SavingsGoalsPage() {
         </section>
 
         {/* Modals */}
-        <GoalForm open={openGoalForm} onClose={() => { setOpenGoalForm(false); setEditing(null); }} onSave={onSaveGoal} initial={editing} />
-        <FundForm open={fundOpen} onClose={() => { setFundOpen(false); setActiveGoal(null); }} onSubmit={doFund} accounts={accounts} goal={activeGoal} mode="fund" />
-        <FundForm open={withdrawOpen} onClose={() => { setWithdrawOpen(false); setActiveGoal(null); }} onSubmit={doWithdraw} accounts={accounts} goal={activeGoal} mode="withdraw" />
-      
+        <GoalForm
+          open={openGoalForm}
+          onClose={() => {
+            setOpenGoalForm(false);
+            setEditing(null);
+          }}
+          onSave={onSaveGoal}
+          initial={editing}
+        />
+        <FundForm
+          open={fundOpen}
+          onClose={() => {
+            setFundOpen(false);
+            setActiveGoal(null);
+          }}
+          onSubmit={doFund}
+          accounts={accounts}
+          goal={activeGoal}
+          mode="fund"
+        />
+        <FundForm
+          open={withdrawOpen}
+          onClose={() => {
+            setWithdrawOpen(false);
+            setActiveGoal(null);
+          }}
+          onSubmit={doWithdraw}
+          accounts={accounts}
+          goal={activeGoal}
+          mode="withdraw"
+        />
       </div>
     </div>
   );

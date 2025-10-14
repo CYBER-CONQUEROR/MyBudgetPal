@@ -28,16 +28,9 @@ export async function stt(req, res) {
       req.file.originalname?.match(/\.[a-z0-9]+$/i) ? req.file.originalname : `audio.${ext}`;
 
     const file = await toFile(fs.createReadStream(tmp), filename);
-
-    // Allow override via env for faster STT model if available.
-    // Fallback remains whisper-1 (stable).
-    const sttModel = process.env.OPENAI_STT_MODEL || "whisper-1";
-
     const out = await openai.audio.transcriptions.create({
-      model: sttModel,
+      model: "whisper-1",
       file,
-      // Helps decoding + speeds up for English speech (adjust if needed)
-      language: "en",
     });
 
     const text = out?.text || "";

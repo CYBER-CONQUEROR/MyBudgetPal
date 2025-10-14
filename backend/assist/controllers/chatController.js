@@ -5,11 +5,17 @@ import { detectIntent } from "../services/nlu.js";
 // ===== Intents =====
 import { handleAddAccountIntent } from "../intents/addAccountIntent.js";
 import { handleAddTransactionIntent } from "../intents/addTransactionIntent.js";
+import { handleDtdExpenseSummaryIntent } from "../intents/dtdExpenseSummaryIntent.js";
+import { handleAddBankCommitmentIntent } from "../intents/addBankCommitmentIntent.js";
+import { handleCommitmentSummaryIntent } from "../intents/commitmentSummaryIntent.js"; // NEW
 
 // ===== Sessions =====
 import {
   getAddAccountSession,
   getAddTransactionSession,
+  getDtdSummarySession,
+  getBankCommitmentSession,
+  getCommitmentSummarySession, // NEW
 } from "../services/sessionStore.js";
 
 function sse(res, text) {
@@ -37,8 +43,15 @@ function readUtterance(req) {
   return String(raw || "").trim();
 }
 
-// Small registry so we can add more intents without if/else ladders
+// Registry so we can add more intents without if/else ladders
+// NOTE: insertion order matters only for the "sticky" session scan below (for logging neatness).
 const INTENTS = {
+  // NEW: month commitment summary
+  commitment_summary: {
+    getSession: getCommitmentSummarySession,
+    handler: handleCommitmentSummaryIntent,
+  },
+
   add_account: {
     getSession: getAddAccountSession,
     handler: handleAddAccountIntent,
@@ -46,6 +59,14 @@ const INTENTS = {
   add_transaction: {
     getSession: getAddTransactionSession,
     handler: handleAddTransactionIntent,
+  },
+  dtd_expense_summary: {
+    getSession: getDtdSummarySession,
+    handler: handleDtdExpenseSummaryIntent,
+  },
+  add_bank_commitment: {
+    getSession: getBankCommitmentSession,
+    handler: handleAddBankCommitmentIntent,
   },
 };
 
@@ -60,14 +81,22 @@ export async function chat(req, res) {
     console.log("[assist/chat] utterance:", utterance);
 
     if (!utterance) {
-      sse(res, "🤔 I didn’t receive any text. Try: `add a bank account` or `log an expense`");
+      sse(
+        res,
+        "🤔 I didn’t receive any text. Try:\n" +
+        "• `add a bank account`\n" +
+        "• `log an expense`\n" +
+        "• `expense summary for last month`\n" +
+        "• `new bank commitment`\n" +
+        "• `commitment summary for October`"
+      );
       return sseEnd(res);
     }
 
     // 1) STICKY: if any intent session exists for this user, route to it
     for (const [name, api] of Object.entries(INTENTS)) {
       const sess = userId ? api.getSession(userId) : null;
-      console.log(`[router] ${name} session active?`, !!sess);
+      console.log(`[router] ${name} session active?`, !!sess, sess ? `step=${sess.step}` : "");
       if (sess) {
         await api.handler(utterance, userId, res);
         return;
@@ -86,7 +115,7 @@ export async function chat(req, res) {
     // 3) Fallback general chat (LLM answers; no DB claims)
     const system =
       "You are My Budget Pal Assistant. Be concise, friendly, and helpful about personal finance. " +
-      "If users ask to add/update/delete accounts/transactions, do NOT claim it was done. " +
+      "If users ask to add/update/delete accounts/transactions/commitments or summaries, do NOT claim it was done. " +
       "Instead, guide them or trigger the appropriate intent.";
     const messages = Array.isArray(req.body?.messages)
       ? req.body.messages

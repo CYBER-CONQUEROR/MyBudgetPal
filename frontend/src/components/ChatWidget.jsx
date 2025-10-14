@@ -1,3 +1,4 @@
+// src/components/ChatWidget.jsx
 import React, { useEffect, useRef, useState } from "react";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import CloseIcon from "@mui/icons-material/Close";
@@ -8,20 +9,26 @@ import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import SettingsVoiceIcon from "@mui/icons-material/SettingsVoice";
 import PauseCircleIcon from "@mui/icons-material/PauseCircle";
 import CircularProgress from "@mui/material/CircularProgress";
-import api from "../api/api";
-import ConvoButton from "../components/ConvoButton.jsx";
+import api from "../api/api.js";
 
-// base URL pulled from your axios instance
 function apiBase() {
   const base = api.defaults.baseURL || "";
-  // strip trailing /api if present
-  return base.replace(/\/api\/?$/, "");
+  return base.replace(/\/$/, "");
+}
+function userIdHeader() {
+  try {
+    const raw = localStorage.getItem("mbp_user");
+    const u = raw ? JSON.parse(raw) : null;
+    return u?._id ? { "x-user-id": u._id } : {};
+  } catch {
+    return {};
+  }
 }
 
 export default function ChatWidget() {
   const [open, setOpen] = useState(true);
   const [msgs, setMsgs] = useState([
-    { role: "assistant", content: "Hey! How can I help you with your budget today? 😊" },
+    { role: "assistant", content: "Hi! I’m your Budget Pal. Tap Convo to talk hands-free 🎙️" },
   ]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -37,7 +44,6 @@ export default function ChatWidget() {
   const abortRef = useRef(null);
   const convoAbortRef = useRef({ stop: false });
 
-  // WebAudio nodes for basic VAD
   const audioCtxRef = useRef(null);
   const analyserRef = useRef(null);
   const vadRAFRef = useRef(0);
@@ -45,64 +51,113 @@ export default function ChatWidget() {
   useEffect(() => {
     if (!listRef.current) return;
     listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [msgs, streaming, thinking, speaking]);
+  }, [msgs, open]);
 
-  // ---------- SSE CHAT ----------
-  const startStream = async (messages) => {
-    if (abortRef.current) {
-      try { abortRef.current.abort(); } catch {}
-      abortRef.current = null;
+  useEffect(() => {
+    if (!convoOn) {
+      stopEverything();
+    } else {
+      startConversationLoop();
     }
+    return () => stopEverything();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convoOn]);
+
+  const canSend = input.trim().length > 0 && !streaming && !thinking && !speaking;
+
+  /** ---------- SSE reader (robust) ---------- */
+  async function readSSEStream(body, onEvent) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let eventBuf = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+
+      // Consume complete lines
+      let idx;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+
+        // SSE framing:
+        // "data: ..." lines belong to the payload
+        // blank line => end of one event
+        if (line.startsWith("data: ")) {
+          eventBuf += line.slice(6) + "\n";
+        } else if (line.trim() === "") {
+          if (eventBuf.length) {
+            // Complete one event payload (preserve all newlines)
+            onEvent(eventBuf.replace(/\n$/, ""));
+            eventBuf = "";
+          }
+        } else {
+          // Our server sometimes embeds raw newlines inside the single 'data:' write.
+          // Treat unprefixed lines as part of the payload.
+          eventBuf += line + "\n";
+        }
+      }
+    }
+    // Flush any trailing payload
+    if (eventBuf.length) onEvent(eventBuf.replace(/\n$/, ""));
+  }
+
+  /** ---------- STREAM CHAT (SSE) ---------- */
+  const startStream = async (history) => {
     setStreaming(true);
+    const url = `${apiBase()}/assist/chat`;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-
-    const res = await fetch(`${apiBase()}/api/assist/chat`, {
-      method: "POST",
-      signal: ctrl.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages }),
-      credentials: "include",
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...userIdHeader() },
+        credentials: "include",
+        body: JSON.stringify({ messages: history }),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      console.error("fetch /assist/chat failed:", e);
+      setMsgs((m) => [...m, { role: "assistant", content: "Chat API unreachable." }]);
+      setStreaming(false);
+      abortRef.current = null;
+      return "";
+    }
 
     if (!res.ok || !res.body) {
+      const t = await res.text().catch(() => "");
+      console.error("chat HTTP error", res.status, t);
       setMsgs((m) => [...m, { role: "assistant", content: "Chat API is unavailable right now." }]);
       setStreaming(false);
       abortRef.current = null;
       return "";
     }
 
+    // Start a new assistant bubble (we'll update the content as events arrive)
     setMsgs((m) => [...m, { role: "assistant", content: "" }]);
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
     let acc = "";
 
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-
-        // SSE "data: ..." lines
-        const lines = chunk
-          .split("\n")
-          .map((l) => l.trim())
-          .filter(Boolean)
-          .map((l) => (l.startsWith("data: ") ? l.slice(6) : l));
-
-        for (const line of lines) {
-          acc += line + "\n";
-          setMsgs((all) => {
-            const copy = [...all];
-            copy[copy.length - 1] = { role: "assistant", content: sanitizeStream(acc) };
-            return copy;
-          });
-        }
-      }
-    } catch {
-      /* aborted ok */
+      await readSSEStream(res.body, (payload) => {
+        // Accumulate multiple events with a blank line between them
+        acc = acc ? acc + "\n\n" + payload : payload;
+        setMsgs((prev) => {
+          const copy = [...prev];
+          copy[copy.length - 1] = {
+            role: "assistant",
+            content: sanitizeStream(acc),
+          };
+          return copy;
+        });
+      });
+    } catch (e) {
+      console.warn("SSE interrupted:", e?.message || e);
     } finally {
       setStreaming(false);
       abortRef.current = null;
@@ -112,9 +167,8 @@ export default function ChatWidget() {
   };
 
   const send = async () => {
-    const canSend = input.trim().length > 0 && !streaming;
     if (!canSend) return;
-    bargeIn(); // if speaking, stop and send text
+    bargeIn();
     const userMsg = { role: "user", content: input.trim() };
     setMsgs((m) => [...m, userMsg]);
     setInput("");
@@ -122,53 +176,58 @@ export default function ChatWidget() {
   };
 
   const stopStream = () => {
-    if (abortRef.current) {
-      try { abortRef.current.abort(); } catch { }
-      abortRef.current = null;
-    }
+    try { abortRef.current?.abort(); } catch {}
+    abortRef.current = null;
     setStreaming(false);
   };
 
-  // ---------- STT (single shot) ----------
+  /** ---------- STT ---------- */
   const transcribeBlob = async (blob) => {
     const form = new FormData();
     form.append("audio", blob, "clip.webm");
-    const { data } = await api.post("/assist/stt", form);
+    const res = await fetch(`${apiBase()}/assist/speech/stt`, {
+      method: "POST",
+      credentials: "include",
+      headers: { ...userIdHeader() },
+      body: form,
+    });
+    if (!res.ok) throw new Error("STT failed");
+    const data = await res.json();
     return data?.text || "";
   };
 
-  // ---------- TTS ----------
+  /** ---------- TTS ---------- */
   const speak = async (text) => {
     try {
       setSpeaking(true);
-      const { data } = await api.post(
-        "/assist/tts",
-        { text },
-        { responseType: "arraybuffer" }
-      );
-      const audio = new Audio();
-      audioRef.current = audio;
-      audio.src = URL.createObjectURL(new Blob([data], { type: "audio/mpeg" }));
-      await audio.play();
-      // wait to end
-      await new Promise((r) => {
-        audio.onended = () => r();
-        audio.onerror = () => r();
+      const res = await fetch(`${apiBase()}/assist/speech/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...userIdHeader() },
+        credentials: "include",
+        body: JSON.stringify({ text }),
       });
-    } catch {
-      /* ignore */
+      if (!res.ok) throw new Error("TTS failed");
+      const buf = await res.arrayBuffer();
+      const blob = new Blob([buf], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
+      const el = audioRef.current;
+      el.src = url;
+      await el.play();
+      await new Promise((resolve) => {
+        const onEnd = () => { el.removeEventListener("ended", onEnd); resolve(); };
+        el.addEventListener("ended", onEnd);
+      });
     } finally {
       setSpeaking(false);
     }
   };
 
-  // ---------- BASIC VAD RECORD (stops on silence) ----------
+  /** ---------- BASIC VAD RECORD ---------- */
   const recordUntilSilence = async ({
-    minMs = 450,          // minimum capture duration (was 600)
-    silenceMs = 650,      // stop after this much silence (was 900)
-    levelThreshold = 0.014 // 0..1 simple energy threshold (was 0.015)
+    minMs = 600,
+    silenceMs = 900,
+    levelThreshold = 0.015,
   } = {}) => {
-    // request/get cached stream
     if (!mediaStreamRef.current) {
       mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -176,10 +235,6 @@ export default function ChatWidget() {
     }
     const stream = mediaStreamRef.current;
 
-    // reset per-capture speech start flag for auto-barge
-    window.__speechStarted = false;
-
-    // VAD via WebAudio
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
     }
@@ -206,20 +261,13 @@ export default function ChatWidget() {
     await new Promise((resolve) => {
       const tick = () => {
         analyser.getByteTimeDomainData(data);
-        // RMS-ish level
         let sum = 0;
         for (let i = 0; i < data.length; i++) {
-          const v = (data[i] - 128) / 128; // -1..1
+          const v = (data[i] - 128) / 128;
           sum += v * v;
         }
-        const rms = Math.sqrt(sum / data.length); // 0..1
+        const rms = Math.sqrt(sum / data.length);
         const now = performance.now();
-        // [VOICE] auto-barge when speech starts
-        if (!window.__speechStarted && rms > levelThreshold) {
-          window.__speechStarted = true;
-          try { bargeIn(); } catch {}
-        }
-
         if (rms > levelThreshold) lastLoud = now;
 
         const longEnough = now - startedAt >= minMs;
@@ -237,29 +285,21 @@ export default function ChatWidget() {
       vadRAFRef.current = requestAnimationFrame(tick);
     });
 
-    // wait for stop to flush chunks
-    await new Promise((r) => {
-      rec.onstop = () => r();
-    });
-
+    await new Promise((r) => { rec.onstop = () => r(); });
     setRecording(false);
     source.disconnect();
     const blob = new Blob(chunks, { type: "audio/webm" });
     return blob;
   };
 
-  // ---------- CONVERSATION LOOP ----------
+  /** ---------- CONVERSATION LOOP ---------- */
   const startConversationLoop = async () => {
-    // reset abort flag
     convoAbortRef.current.stop = false;
-
     while (!convoAbortRef.current.stop) {
       try {
-        // 1) Listen (ends on silence)
         const blob = await recordUntilSilence();
         if (convoAbortRef.current.stop) break;
 
-        // 2) Transcribe
         setThinking(true);
         let userText = "";
         try {
@@ -267,22 +307,16 @@ export default function ChatWidget() {
         } finally {
           setThinking(false);
         }
-        if (!userText) {
-          // nothing captured: loop again
-          continue;
-        }
+        if (!userText) continue;
+
         setMsgs((m) => [...m, { role: "user", content: userText }]);
+        const reply = await startStream([...msgs, { role: "user", content: userText }]);
+        if (!reply) continue;
 
-        // 3) Get reply (stream)
-        const full = await startStream([...msgs, { role: "user", content: userText }]);
-        if (!full) continue;
-
-        // 4) Speak final reply if convo mode still on, and not interrupted
-        if (!convoAbortRef.current.stop) {
-          await speak(full);
-        }
+        if (convoAbortRef.current.stop) break;
+        await speak(reply);
       } catch {
-        // ignore & keep loop unless stopped
+        // keep looping
       }
     }
   };
@@ -293,41 +327,23 @@ export default function ChatWidget() {
   };
 
   const bargeIn = () => {
-    // stop TTS and recording/streaming if user interacts
-    try { audioRef.current?.pause(); audioRef.current.currentTime = 0; } catch { }
-    setSpeaking(false);
+    try { audioRef.current?.pause(); audioRef.current.currentTime = 0; } catch {}
     if (recording) setRecording(false);
     stopStream();
   };
 
   const stopEverything = () => {
-    // stop TTS
-    try { audioRef.current?.pause(); } catch { }
+    try { audioRef.current?.pause(); } catch {}
     setSpeaking(false);
-
-    // stop stream
     stopStream();
-
-    // stop VAD loop
     if (vadRAFRef.current) cancelAnimationFrame(vadRAFRef.current);
     vadRAFRef.current = 0;
-
-    // stop recorder
-    try { mediaRecRef.current?.stop(); } catch { }
+    try { mediaRecRef.current?.stop(); } catch {}
     setRecording(false);
-
-    // keep mic stream for faster restarts (optional). If you want to fully close:
-    // mediaStreamRef.current?.getTracks().forEach(t => t.stop());
-    // mediaStreamRef.current = null;
   };
 
-  // ---------- STT (manual button) ----------
   const toggleRecord = async () => {
-    if (recording) {
-      // VAD controls stopping; user pressing again = barge-in stop
-      stopEverything();
-      return;
-    }
+    if (recording) { stopEverything(); return; }
     bargeIn();
     try {
       const blob = await recordUntilSilence();
@@ -339,163 +355,192 @@ export default function ChatWidget() {
         return;
       }
       setMsgs((m) => [...m, { role: "user", content: text }]);
-      const full = await startStream([...msgs, { role: "user", content: text }]);
-      if (full) await speak(full);
+      await startStream([...msgs, { role: "user", content: text }]);
     } catch {
-      // ignore
+      setThinking(false);
+      setMsgs((m) => [...m, { role: "assistant", content: "Voice processing failed." }]);
     }
   };
 
+  const speakLast = async () => {
+    const last = [...msgs].reverse().find((m) => m.role === "assistant");
+    if (!last) return;
+    bargeIn();
+    await speak(last.content);
+  };
+
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-[380px] max-w-[92vw]">
-      <div className="rounded-2xl shadow-xl ring-1 ring-slate-200 bg-white overflow-hidden">
-        {/* header */}
-        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200">
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-full bg-indigo-600/10 grid place-items-center">
-              <ChatBubbleOutlineIcon fontSize="small" className="text-indigo-700" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-slate-900">My Budget Pal Assistant</div>
-              <div className="text-xs text-slate-500">
-                {speaking ? "Speaking…" : streaming ? "Responding…" : recording ? "Listening…" : (convoOn ? "Convo mode: ON" : "Online")}
+    <>
+      {!open && (
+        <button
+          onClick={() => setOpen(true)}
+          className="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-600 text-white shadow-lg hover:bg-indigo-700"
+          title="Chat with us"
+        >
+          <ChatBubbleOutlineIcon />
+        </button>
+      )}
+
+      {open && (
+        <div className="fixed bottom-5 right-5 z-50 w-[min(92vw,380px)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          {/* header */}
+          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-full bg-indigo-600/10 grid place-items-center">
+                <ChatBubbleOutlineIcon fontSize="small" className="text-indigo-700" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-900">My Budget Pal Assistant</div>
+                <div className="text-xs text-slate-500">
+                  {speaking ? "Speaking…" : streaming ? "Responding…" : thinking ? "Processing…" : recording ? "Listening…" : (convoOn ? "Convo mode: ON" : "Online")}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-1">
-            {/* Convo toggle */}
-            {!convoOn ? (
+            <div className="flex items-center gap-1">
+              {!convoOn ? (
+                <button
+                  onClick={() => setConvoOn(true)}
+                  className="rounded-lg p-2 text-indigo-700 hover:bg-indigo-50"
+                  title="Start conversation mode"
+                >
+                  <SettingsVoiceIcon fontSize="small" />
+                </button>
+              ) : (
+                <button
+                  onClick={stopConversationLoop}
+                  className="rounded-lg p-2 text-rose-600 hover:bg-rose-50"
+                  title="Stop conversation mode"
+                >
+                  <PauseCircleIcon fontSize="small" />
+                </button>
+              )}
+
               <button
-                onClick={() => setConvoOn(true)}
-                className="rounded-lg p-2 text-indigo-700 hover:bg-indigo-50"
-                title="Start conversation mode"
+                onClick={speakLast}
+                className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
+                title="Read last answer"
               >
-                <SettingsVoiceIcon fontSize="small" />
+                <VolumeUpIcon fontSize="small" />
               </button>
-            ) : (
+
               <button
-                onClick={stopConversationLoop}
-                className="rounded-lg p-2 text-rose-600 hover:bg-rose-50"
-                title="Stop conversation mode"
+                onClick={() => { setOpen(false); stopEverything(); setConvoOn(false); }}
+                className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
+                title="Close"
               >
-                <PauseCircleIcon fontSize="small" />
+                <CloseIcon fontSize="small" />
               </button>
-            )}
-
-            {/* volume test button */}
-            <button
-              onClick={async () => {
-                bargeIn();
-                await speak("Hi! I will speak briefly. Press the spacebar or mic button to interrupt me anytime.");
-              }}
-              className="rounded-lg p-2 text-slate-700 hover:bg-slate-100"
-              title="Test TTS"
-            >
-              <VolumeUpIcon fontSize="small" />
-            </button>
-
-            <button
-              onClick={() => setOpen(false)}
-              className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
-              title="Close"
-            >
-              <CloseIcon fontSize="small" />
-            </button>
-          </div>
-        </div>
-
-        {/* messages */}
-        <div ref={listRef} className="max-h-[50vh] overflow-y-auto p-3 space-y-3">
-          {msgs.map((m, i) => (
-            <Bubble key={i} who={m.role}>{m.content}</Bubble>
-          ))}
-
-          {(streaming || thinking || recording || speaking) && (
-            <div className="flex items-center gap-2 pl-10">
-              <div className="rounded-2xl rounded-tl-sm bg-white px-3 py-1.5 ring-1 ring-slate-200 text-sm text-slate-700 flex items-center gap-2">
-                <CircularProgress size={16} />
-                {speaking ? "Speaking…" : streaming ? "Typing…" : thinking ? "Thinking…" : "Listening…"}
-              </div>
             </div>
-          )}
-        </div>
+          </div>
 
-        {/* composer */}
-        <div className="border-t border-slate-200 p-2">
-          <div className="flex items-end gap-2">
-            <button
-              onClick={toggleRecord}
-              className={`rounded-xl px-3 py-2 text-sm font-medium ${recording ? "bg-rose-600 text-white hover:bg-rose-700" : "bg-slate-100 text-slate-800 hover:bg-slate-200"}`}
-              title={recording ? "Stop" : "Hold to talk"}
-            >
-              {recording ? <StopCircleIcon fontSize="small" /> : <MicIcon fontSize="small" />}
-            </button>
-
-            <textarea
-              rows={1}
-              value={input}
-              onChange={(e) => { bargeIn(); setInput(e.target.value); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-                // [VOICE] Space = stop speaking (barge-in)
-                if (e.key === " " && speaking) {
-                  e.preventDefault();
-                  bargeIn();
-                }
-                if (e.key === "Escape") {
-                  bargeIn();
-                }
-              }}
-              placeholder="Type a message…"
-              className="flex-1 resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-
-            {!streaming ? (
-              <button
-                onClick={send}
-                disabled={!input.trim()}
-                className={`rounded-xl px-3 py-2 text-sm font-medium ${input.trim() ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-slate-200 text-slate-500"}`}
-                title="Send"
-              >
-                <SendIcon fontSize="small" />
-              </button>
-            ) : (
-              <button
-                onClick={bargeIn}
-                className="rounded-xl px-3 py-2 text-sm font-medium bg-rose-100 text-rose-700 hover:bg-rose-200"
-                title="Stop response"
-              >
-                <StopCircleIcon fontSize="small" />
-              </button>
+          {/* messages */}
+          <div ref={listRef} className="max-h-[60vh] overflow-y-auto px-3 py-3 space-y-3 bg-slate-50/40">
+            {msgs.map((m, i) => (<Bubble key={i} role={m.role} text={m.content} />))}
+            {(streaming || thinking || recording || speaking) && (
+              <div className="flex justify-start">
+                <div className="rounded-2xl rounded-tl-sm bg-white px-3 py-2 shadow-sm ring-1 ring-slate-200 text-sm text-slate-700 flex items-center gap-2">
+                  <CircularProgress size={16} />
+                  {speaking ? "Speaking…" : streaming ? "Typing…" : thinking ? "Thinking…" : "Listening…"}
+                </div>
+              </div>
             )}
           </div>
+
+          {/* composer */}
+          <div className="border-t border-slate-200 p-2">
+            <div className="flex items-end gap-2">
+              <button
+                onClick={toggleRecord}
+                className={`rounded-xl px-3 py-2 text-sm font-medium ${recording ? "bg-rose-600 text-white hover:bg-rose-700" : "bg-slate-100 text-slate-800 hover:bg-slate-200"}`}
+                title={recording ? "Stop" : "Hold to talk"}
+              >
+                {recording ? <StopCircleIcon fontSize="small" /> : <MicIcon fontSize="small" />}
+              </button>
+
+              <textarea
+                rows={1}
+                value={input}
+                onChange={(e) => { bargeIn(); setInput(e.target.value); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+                  if (e.key === "Escape") { bargeIn(); }
+                }}
+                placeholder="Type a message…"
+                className="flex-1 resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+
+              {!streaming ? (
+                <button
+                  onClick={send}
+                  disabled={!canSend}
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold ${canSend ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-slate-200 text-slate-500"}`}
+                  title="Send"
+                >
+                  <SendIcon fontSize="small" />
+                </button>
+              ) : (
+                <button
+                  onClick={stopStream}
+                  className="rounded-xl px-3 py-2 text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600"
+                  title="Stop streaming"
+                >
+                  Stop
+                </button>
+              )}
+            </div>
+
+            <audio ref={audioRef} className="hidden" />
+          </div>
         </div>
-      </div>
+      )}
+    </>
+  );
+}
+
+/** --------- Bubble renderer with code-fence support --------- */
+function Bubble({ role, text }) {
+  const mine = role === "user";
+  const isFence = typeof text === "string" && text.startsWith("```") && text.endsWith("```");
+  const content = isFence ? text.slice(3, -3).trim() : text;
+
+  return (
+    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+      {isFence ? (
+        <pre
+          className={[
+            "max-w-[85%] whitespace-pre-wrap break-words text-sm leading-relaxed",
+            "px-3 py-2 rounded-2xl shadow-sm ring-1",
+            mine
+              ? "bg-indigo-600 text-white ring-indigo-600/20 rounded-br-sm"
+              : "bg-white text-slate-800 ring-slate-200 rounded-tl-sm",
+          ].join(" ")}
+        >
+          {content}
+        </pre>
+      ) : (
+        <div
+          className={[
+            "max-w-[85%] whitespace-pre-wrap break-words text-sm leading-relaxed",
+            "px-3 py-2 rounded-2xl shadow-sm ring-1",
+            mine
+              ? "bg-indigo-600 text-white ring-indigo-600/20 rounded-br-sm"
+              : "bg-white text-slate-800 ring-slate-200 rounded-tl-sm",
+          ].join(" ")}
+        >
+          {content}
+        </div>
+      )}
     </div>
   );
 }
 
-function Bubble({ who, children }) {
-  const me = who === "user";
-  const text = String(children || "");
-  return (
-    <div className={`flex ${me ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`${me ? "rounded-2xl rounded-tr-sm bg-indigo-600 text-white" : "rounded-2xl rounded-tl-sm bg-white text-slate-800 ring-1 ring-slate-200"} px-3 py-2 max-w-[82%] text-sm whitespace-pre-wrap leading-relaxed`}
-      >
-        {text}
-      </div>
-    </div>
-  );
-}
-
+/** Keep newlines; collapse only 3+ into 2; normalize CRLF */
 function sanitizeStream(s) {
   try {
-    return s.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n");
+    return String(s ?? "")
+      .replace(/\r/g, "")
+      .replace(/\n{4,}/g, "\n\n"); // keep intentional blank lines
   } catch {
     return s || "";
   }

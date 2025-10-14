@@ -260,21 +260,9 @@ export function clearBankCommitmentSession(userId) {
 }
 
 /* =========================
- * COMMITMENT MONTH SUMMARY (NEW)
+ * COMMITMENT MONTH SUMMARY (existing/new)
  * =========================
  * Intent: "commitment_summary"
- * Slots we keep:
- *   month          : number|null (1..12)
- *   year           : number|null (e.g., 2025)
- *   label          : string|null  // UI/display label (e.g., "October 2025", "last_month")
- *   status         : "paid"|"pending"|null
- *   category       : string|null  // "Loan" | "Credit Card" | "Insurance" | "Bill" | "Other"
- *   accountId      : string|null  // if user chooses a specific account for filtering
- *   accountName    : string|null  // display name for accountId
- *   recurringOnly  : boolean|null // true => only recurring, false => only one-off, null => both
- *   aggregate      : boolean|null // true => return total only in handler; null/false => full breakdown
- *
- * step: "intro" -> ask missing timeframe -> (optional) ask filters -> "show"
  */
 export function getCommitmentSummarySession(userId) {
   const k = key(userId);
@@ -337,4 +325,144 @@ export function clearCommitmentSummarySession(userId) {
   if (!k) return;
   const existed = store.delete(k);
   console.log("[session] clear(commit-sum):", { k, existed });
+}
+
+/* =========================
+ * ADD SAVING GOAL (NEW)
+ * =========================
+ * Intent: "add_saving_goal"
+ * Slots:
+ *   goalTitle                : string|null
+ *   targetAmountLKR          : number|null
+ *   monthlyContributionLKR   : number|null
+ *   targetDateISO            : "YYYY-MM-DD"|null
+ *   accountId                : string|null
+ *   accountName              : string|null
+ *   note                     : string|null
+ *
+ * step: "intro" -> ask missing -> "confirm"
+ */
+export function getSavingGoalSession(userId) {
+  const k = key(userId);
+  const s = k ? store.get(k) : null;
+  if (!k) { console.log("[session] get(goal): no key for userId", userId); return null; }
+  const hit = !!(s && s.intent === "add_saving_goal");
+  console.log("[session] get(goal):", { k, hit, step: s?.step });
+  return hit ? s : null;
+}
+
+export function startSavingGoalSession(userId, seeds = {}) {
+  const k = key(userId);
+  if (!k) return null;
+  const session = {
+    intent: "add_saving_goal",
+    slots: {
+      goalTitle: seeds.goalTitle ?? null,
+      targetAmountLKR: seeds.targetAmountLKR ?? null,
+      monthlyContributionLKR: seeds.monthlyContributionLKR ?? null,
+      targetDateISO: seeds.targetDateISO ?? null,
+      accountId: seeds.accountId ?? null,
+      accountName: seeds.accountName ?? null,
+      note: seeds.note ?? null,
+    },
+    step: seeds.step || "intro",
+  };
+  store.set(k, session);
+  console.log("[session] start(goal):", { k, step: session.step, slots: session.slots });
+  return session;
+}
+
+export function updateSavingGoalSession(userId, patch) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "add_saving_goal") return;
+  s.slots = { ...s.slots, ...patch };
+  store.set(k, s);
+  console.log("[session] update(goal):", { k, step: s.step, slots: s.slots });
+}
+
+export function setSavingGoalStep(userId, step) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "add_saving_goal") return;
+  s.step = step;
+  store.set(k, s);
+  console.log("[session] step(goal):", { k, step });
+}
+
+export function clearSavingGoalSession(userId) {
+  const k = key(userId);
+  if (!k) return;
+  const existed = store.delete(k);
+  console.log("[session] clear(goal):", { k, existed });
+}
+
+/* =========================
+ * SAVING GOAL SUMMARY (NEW)
+ * =========================
+ * Intent: "saving_goal_summary"
+ * Slots:
+ *   month          : number|null       // 1..12
+ *   year           : number|null
+ *   label          : string|null       // "this_month" | "last_month" | "Oct 2025" etc.
+ *   priority       : "high"|"medium"|"low"|null
+ *   goalNameHint   : string|null       // optional fuzzy filter like "for Europe Trip"
+ *
+ * step: "intro" -> ask month if missing -> "ready" (handler computes & replies) -> clear
+ */
+export function getSavingGoalSummarySession(userId) {
+  const k = key(userId);
+  const s = k ? store.get(k) : null;
+  if (!k) { console.log("[session] get(goal-sum): no key for userId", userId); return null; }
+  const hit = !!(s && s.intent === "saving_goal_summary");
+  console.log("[session] get(goal-sum):", { k, hit, step: s?.step });
+  return hit ? s : null;
+}
+
+export function startSavingGoalSummarySession(userId, seeds = {}) {
+  const k = key(userId);
+  if (!k) return null;
+  const session = {
+    intent: "saving_goal_summary",
+    slots: {
+      month: seeds.month ?? seeds.timeframe?.month ?? null,
+      year: seeds.year ?? seeds.timeframe?.year ?? null,
+      label: seeds.label ?? seeds.timeframe?.label ?? null,
+      priority: seeds.priority ?? null,
+      goalNameHint: seeds.goalNameHint ?? null,
+    },
+    step: seeds.step || "intro",
+  };
+  store.set(k, session);
+  console.log("[session] start(goal-sum):", { k, step: session.step, slots: session.slots });
+  return session;
+}
+
+export function updateSavingGoalSummarySession(userId, patch) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "saving_goal_summary") return;
+  s.slots = { ...s.slots, ...patch };
+  store.set(k, s);
+  console.log("[session] update(goal-sum):", { k, step: s.step, slots: s.slots });
+}
+
+export function setSavingGoalSummaryStep(userId, step) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "saving_goal_summary") return;
+  s.step = step;
+  store.set(k, s);
+  console.log("[session] step(goal-sum):", { k, step });
+}
+
+export function clearSavingGoalSummarySession(userId) {
+  const k = key(userId);
+  if (!k) return;
+  const existed = store.delete(k);
+  console.log("[session] clear(goal-sum):", { k, existed });
 }

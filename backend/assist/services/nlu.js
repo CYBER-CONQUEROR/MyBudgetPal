@@ -308,7 +308,7 @@ function parseRecurringFilter(text="") {
  * Parse a "commitment summary" query:
  *  - timeframe: {month,year,label}
  *  - optional: status ("paid"|"pending"), category ("Loan"/"Credit Card"/"Insurance"/"Bill"/"Other"),
- *              accountHint (free text), recurringOnly (true/false|null), aggregate (boolean)
+ *              accountHint (free text), recurringOnly (true/false/null), aggregate (boolean)
  */
 export function parseCommitmentSummaryQuery(utterance = "", now = new Date()) {
   const t = (utterance || "").toLowerCase();
@@ -335,24 +335,161 @@ export function parseCommitmentSummaryQuery(utterance = "", now = new Date()) {
   };
 }
 
+/* ---------- NEW: Saving Goal parsing ---------- */
+/**
+ * Extract fields for creating a saving goal from a single message.
+ * Returns:
+ *  {
+ *    goalTitle,               // string|null
+ *    targetAmountLKR,         // number|null
+ *    monthlyContributionLKR,  // number|null
+ *    targetDate,              // Date|null
+ *    accountHint,             // string|null
+ *  }
+ */
+export function parseSavingGoalDraft(utterance = "", now = new Date()) {
+  const t = (utterance || "");
+
+  // monthly contribution: "10k per month", "monthly 5000", "5,000/month"
+  let monthlyContributionLKR = null;
+  const perMonthA = t.match(/(?:rs\.?|lkr|රු|r\.)?\s*([\d,.]+)\s*(?:\/\s*month|per\s*month|monthly)\b/i);
+  const perMonthB = t.match(/\bmonthly\s*(?:is\s*)?(?:rs\.?|lkr|රු|r\.)?\s*([\d,.]+)\b/i);
+  if (perMonthA) monthlyContributionLKR = Math.round(parseFloat(perMonthA[1].replace(/,/g,"")));
+  else if (perMonthB) monthlyContributionLKR = Math.round(parseFloat(perMonthB[1].replace(/,/g,"")));
+
+  // target amount: "goal of 500k", "target 200,000", "save 150k"
+  let targetAmountLKR = null;
+  const amt1 = t.match(/\b(goal|target|aim)\s*(?:is\s*)?(?:of\s*)?(?:rs\.?|lkr|රු|r\.)?\s*([\d,.]+k?)\b/i);
+  const amt2 = t.match(/\b(save|saving|save up)\s*(?:around\s*)?(?:rs\.?|lkr|රු|r\.)?\s*([\d,.]+k?)\b/i);
+  const toNumberK = (s) => {
+    const m = String(s || "").toLowerCase().replace(/,/g,"").trim();
+    if (!m) return null;
+    if (/^\d+(\.\d+)?k$/.test(m)) return Math.round(parseFloat(m) * 1000);
+    return Math.round(parseFloat(m));
+  };
+  if (amt1) targetAmountLKR = toNumberK(amt1[2]);
+  else if (amt2) targetAmountLKR = toNumberK(amt2[2]);
+  // if not found, and there's a single amount and we already extracted monthly, try to distinguish:
+  if (targetAmountLKR == null) {
+    const allAmts = [...t.matchAll(/(?:rs\.?|lkr|රු|r\.)?\s*([\d,.]+k?)(?:\s*\/-)?/ig)].map(m => toNumberK(m[1]));
+    if (allAmts.length === 1 && monthlyContributionLKR == null) {
+      targetAmountLKR = allAmts[0];
+    } else if (allAmts.length === 2 && monthlyContributionLKR != null) {
+      // pick the non-monthly as target by magnitude (usually > monthly)
+      targetAmountLKR = Math.max(...allAmts);
+    }
+  }
+
+  // target date (deadline)
+  const targetDate = parseDateish(t, now);
+
+  // account hint (optional)
+  const accountHint = parseAccountHint(t);
+
+  // goal title: after "for/towards/named/title is/goal is" or standalone phrase after "saving goal"
+  let goalTitle = null;
+  const titleA = t.match(/\b(?:title|name|goal)\s*(?:is|:)\s*([^,.;\n]{2,})/i);
+  const titleB = t.match(/\b(?:for|towards|about|regarding)\s+([^,.;\n]{2,})/i);
+  if (titleA) goalTitle = titleA[1].trim();
+  else if (titleB) goalTitle = titleB[1].trim();
+  else {
+    const afterPhrase = t.match(/\b(saving\s*goal|savings?\s*goal)\b\s*[:\-]?\s*([^,.;\n]{2,})/i);
+    if (afterPhrase) goalTitle = afterPhrase[2].trim();
+  }
+
+  return {
+    goalTitle: goalTitle || null,
+    targetAmountLKR: Number.isFinite(targetAmountLKR) ? targetAmountLKR : null,
+    monthlyContributionLKR: Number.isFinite(monthlyContributionLKR) ? monthlyContributionLKR : null,
+    targetDate: targetDate || null,
+    accountHint: accountHint || null,
+  };
+}
+
+/* ---------- NEW: Saving Goal Summary parsing ---------- */
+// priority filter for summaries
+function parseGoalPriorityFilter(text = "") {
+  const t = (text || "").toLowerCase();
+  if (/\b(high|urgent|top|critical|important|high\s*prio|prio\s*high|🔥)\b/.test(t)) return "high";
+  if (/\b(low|later|chill|not urgent|low\s*prio|prio\s*low)\b/.test(t)) return "low";
+  if (/\b(medium|normal|standard|mid|avg|average|prio\s*med|med\s*prio)\b/.test(t)) return "medium";
+  return null;
+}
+
+// accepts "for <goal name>" hint: e.g., "summary for Europe Trip"
+function parseGoalNameHint(text = "") {
+  const t = (text || "").toLowerCase();
+  const m =
+    text.match(/\bfor\s+([a-z][a-z0-9\s&-]{2,})$/i) ||
+    text.match(/\babout\s+([a-z][a-z0-9\s&-]{2,})$/i);
+  if (!m) return null;
+  return m[1].trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Parse a "saving goals summary" query:
+ *  - timeframe: {month,year,label}  (optional; ask if missing)
+ *  - optional: priority filter ("high"|"medium"|"low")
+ *  - optional: goalNameHint (free text after "for ...")
+ */
+export function parseSavingGoalSummaryQuery(utterance = "", now = new Date()) {
+  const timeframe = parseSummaryTimeframe(utterance, now);
+  const priority = parseGoalPriorityFilter(utterance);
+  const goalNameHint = parseGoalNameHint(utterance);
+  return {
+    timeframe: timeframe || null,
+    priority: priority || null,
+    goalNameHint: goalNameHint || null,
+  };
+}
+
 // ---------- Intent detection ----------
 export async function detectIntent(utterance = "") {
   const t = (utterance || "").toLowerCase().trim();
 
-  // ===== NEW: Commitment Month Summary =====
-  // Triggers on "commitment(s) summary/summery/report/overview/total" with a month ref,
-  // or generic "commitment summary" phrases (we'll ask for month if missing).
-  const commitWord =
-    /\b(commitment|commitments|standing\s*order|auto[-\s]?pay|autopay|installment|instalment|scheduled\s*payment|recurring)\b/;
+  // ===== NEW: Saving Goal Summary =====
+  // Triggers: "saving goal(s) summary/summery/report/overview/total", optionally with month/priority
+  const savingGoalPhrase = /\b(saving|savings?)\s*goal(s)?\b/;
   const summaryWord =
-    /\b(summ(?:ary|arise|arize)|summery|report|breakdown|overview|analysis|stats?|total|sum|spend)\b/;
+    /\b(summ(?:ary|arise|arize)|summery|report|breakdown|overview|analysis|stats?|total|sum|progress|status|performance|completion)\b/;
   const hasMonthRef =
     /\b(this|current|last|next)\s+month\b/i.test(t) ||
     /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i.test(t) ||
     /\b(0?[1-9]|1[0-2])[\/\-](\d{4})\b/.test(t) || // mm/yyyy
     /\b(\d{4})[\/\-](0?[1-9]|1[0-2])\b/.test(t);   // yyyy-mm
+  if (savingGoalPhrase.test(t) && (summaryWord.test(t) || hasMonthRef)) {
+    return "saving_goal_summary";
+  }
 
-  if ((commitWord.test(t) && summaryWord.test(t)) || (commitWord.test(t) && hasMonthRef)) {
+  // ===== NEW: Saving Goal (add) =====
+  // Triggers on: "new saving goal", "new goal", "add saving goal", "add new saving goal", "saving goal", "set goal to save ..."
+  const createish = /\b(add|create|new|set\s*up|setup|set|start|make)\b/;
+  const goalGeneric = /\bgoal\b/;
+  const saveVerb = /\bsave|saving|save\s*up\b/;
+  const moneyOrDate = /(?:rs\.?|lkr|රු|r\.)\s*\d|\/month|per\s*month|monthly|\d{4}[\/-](0?[1-9]|1[0-2])|(?:0?[1-9]|[12]\d|3[01])[\/-](0?[1-9]|1[0-2])|\bjan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec\b/;
+
+  if (savingGoalPhrase.test(t) && createish.test(t)) {
+    return "add_saving_goal";
+  }
+  if (savingGoalPhrase.test(t) && !summaryWord.test(t)) {
+    return "add_saving_goal";
+  }
+  if (goalGeneric.test(t) && (createish.test(t) || saveVerb.test(t) || moneyOrDate.test(t))) {
+    return "add_saving_goal";
+  }
+
+  // ===== NEW: Commitment Month Summary =====
+  const commitWord =
+    /\b(commitment|commitments|standing\s*order|auto[-\s]?pay|autopay|installment|instalment|scheduled\s*payment|recurring)\b/;
+  const summaryWord2 =
+    /\b(summ(?:ary|arise|arize)|summery|report|breakdown|overview|analysis|stats?|total|sum|spend)\b/;
+  const hasMonthRef2 =
+    /\b(this|current|last|next)\s+month\b/i.test(t) ||
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i.test(t) ||
+    /\b(0?[1-9]|1[0-2])[\/\-](\d{4})\b/.test(t) || // mm/yyyy
+    /\b(\d{4})[\/\-](0?[1-9]|1[0-2])\b/.test(t);   // yyyy-mm
+
+  if ((commitWord.test(t) && summaryWord2.test(t)) || (commitWord.test(t) && hasMonthRef2)) {
     return "commitment_summary";
   }
 
@@ -361,10 +498,10 @@ export async function detectIntent(utterance = "") {
   const commitKw = /\b(commitment|standing\s*order|auto[-\s]?pay|autopay|installment|instalment|emi|loan|mortgage|rent|premium|insurance|subscription|bill|credit\s*card\s*bill|credit\s*card\s*payment)\b/;
   const bankish = /\b(bank|account|card)\b/; // mentions bank/card/account
   const recish = /\b(recurring|repeat|every|monthly|weekly|daily|yearly)\b/;
-  const createish = /\b(add|create|new|set\s*up|setup|log|record|schedule|make)\b/;
+  const createish2 = /\b(add|create|new|set\s*up|setup|log|record|schedule|make)\b/;
   const badTypos = /\bexpens\b/; // “expens” typo (user example)
   if (
-    (createish.test(t) && (commitKw.test(t) || badTypos.test(t))) ||
+    (createish2.test(t) && (commitKw.test(t) || badTypos.test(t))) ||
     (commitKw.test(t) && (recish.test(t) || bankish.test(t))) ||
     /\b(new|add)\s+bank\s+(expense|expens|commitment)\b/.test(t)
   ) {

@@ -7,7 +7,9 @@ import { handleAddAccountIntent } from "../intents/addAccountIntent.js";
 import { handleAddTransactionIntent } from "../intents/addTransactionIntent.js";
 import { handleDtdExpenseSummaryIntent } from "../intents/dtdExpenseSummaryIntent.js";
 import { handleAddBankCommitmentIntent } from "../intents/addBankCommitmentIntent.js";
-import { handleCommitmentSummaryIntent } from "../intents/commitmentSummaryIntent.js"; // NEW
+import { handleCommitmentSummaryIntent } from "../intents/commitmentSummaryIntent.js";
+import { handleAddSavingGoalIntent } from "../intents/addSavingGoalIntent.js";
+import { handleSavingGoalSummaryIntent } from "../intents/savingGoalSummaryIntent.js"; // NEW
 
 // ===== Sessions =====
 import {
@@ -15,7 +17,9 @@ import {
   getAddTransactionSession,
   getDtdSummarySession,
   getBankCommitmentSession,
-  getCommitmentSummarySession, // NEW
+  getCommitmentSummarySession,
+  getSavingGoalSession,
+  getSavingGoalSummarySession, // NEW
 } from "../services/sessionStore.js";
 
 function sse(res, text) {
@@ -44,14 +48,23 @@ function readUtterance(req) {
 }
 
 // Registry so we can add more intents without if/else ladders
-// NOTE: insertion order matters only for the "sticky" session scan below (for logging neatness).
+// (Order mainly affects the sticky-session scan logs)
 const INTENTS = {
-  // NEW: month commitment summary
+  // ===== NEW: Saving Goals Summary =====
+  saving_goal_summary: {
+    getSession: getSavingGoalSummarySession,
+    handler: handleSavingGoalSummaryIntent,
+  },
+
+  // ===== Existing / previously-added =====
   commitment_summary: {
     getSession: getCommitmentSummarySession,
     handler: handleCommitmentSummaryIntent,
   },
-
+  add_saving_goal: {
+    getSession: getSavingGoalSession,
+    handler: handleAddSavingGoalIntent,
+  },
   add_account: {
     getSession: getAddAccountSession,
     handler: handleAddAccountIntent,
@@ -88,7 +101,9 @@ export async function chat(req, res) {
         "• `log an expense`\n" +
         "• `expense summary for last month`\n" +
         "• `new bank commitment`\n" +
-        "• `commitment summary for October`"
+        "• `commitment summary for October`\n" +
+        "• `add saving goal`\n" +
+        "• `saving goals summary`"
       );
       return sseEnd(res);
     }
@@ -115,7 +130,7 @@ export async function chat(req, res) {
     // 3) Fallback general chat (LLM answers; no DB claims)
     const system =
       "You are My Budget Pal Assistant. Be concise, friendly, and helpful about personal finance. " +
-      "If users ask to add/update/delete accounts/transactions/commitments or summaries, do NOT claim it was done. " +
+      "If users ask to add/update/delete accounts/transactions/commitments/goals or summaries, do NOT claim it was done. " +
       "Instead, guide them or trigger the appropriate intent.";
     const messages = Array.isArray(req.body?.messages)
       ? req.body.messages

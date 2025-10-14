@@ -1,5 +1,20 @@
 // src/pages/EventsPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import {
+  CalendarDays,
+  Target,
+  PiggyBank,
+  ShoppingCart,
+  Undo2,
+  Pencil,
+  Trash2,
+  PlusCircle,
+  MinusCircle,
+  Download,
+  Plus,
+  RefreshCw,
+  FileText
+} from "lucide-react";
 import api from "../api/api.js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -67,20 +82,60 @@ function Field({ label, required, children, hint }) {
 }
 
 function Modal({ open, onClose, title, children, max = "max-w-2xl" }) {
+  // Lock body scroll while open
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  // Close on ESC
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => e.key === "Escape" && onClose?.();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
+
   return (
-    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      {/* Black overlay */}
+      <div className="absolute inset-0 bg-black/60" />
+
+      {/* Modal panel */}
       <div
-        className={`bg-white rounded-2xl w-full ${max} shadow-xl border border-slate-200`}
+        className={`relative bg-white rounded-2xl w-full ${max} shadow-xl border border-slate-200 max-h-[85vh] overflow-hidden flex flex-col`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+        {/* Header (fixed inside the panel) */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 shrink-0">
           <h3 className="text-lg font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-700 text-xl" aria-label="Close">
+          <button
+            onClick={onClose}
+            className="text-slate-500 hover:text-slate-700 text-xl"
+            aria-label="Close"
+          >
             ×
           </button>
         </div>
-        <div className="p-5">{children}</div>
+
+        {/* Scrollable content area */}
+        <div
+          className="p-5 overflow-y-auto"
+          style={{ WebkitOverflowScrolling: "touch" }} // smooth momentum scrolling on iOS
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -112,7 +167,7 @@ function makeReportFilename(prefix, ts = new Date()) {
   return `${prefix}_${ts.toISOString().replace(/[:T]/g, "-").slice(0, 15)}.pdf`;
 }
 
-/* ===================== NEW: PDF to match sketch ===================== */
+// ===================== Event Expenses PDF (Indigo brand theme) =====================
 async function generateEventExpensesReportPDF({
   rows,
   filters,
@@ -120,218 +175,581 @@ async function generateEventExpensesReportPDF({
   logoUrl = "/reportLogo.png",
 }) {
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+
+  // ---- layout & palette (matches Commitments screenshot) ----
   const margin = 40;
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
+  const brand = { r: 79, g: 70, b: 229 };        // indigo-600 (purple lines)
+  const brandLight = { r: 241, g: 245, b: 255 }; // indigo-50 (filter panel)
+  const slateTxt = 40;
+  const TOTAL_PAGES_TOKEN = "{total_pages_count_string}";
 
-  // Header
-  let textX = margin;
-  try {
-    const logoData = await loadImageDataURL(logoUrl);
-    console.log(logoUrl);
-    if (logoData) {
-      doc.addImage(logoData, "PNG", margin, margin - 4, 44, 44);
-      textX = margin + 56;
-    }
-  } catch (_) {}
-  doc.setFont("helvetica", "bold").setFontSize(20).text("My Budget Pal", textX, margin + 12);
-  doc.setFont("helvetica", "normal").setFontSize(16).text("Event Expenses Report", textX, margin + 34);
-
-  // Left vertical caption
-  doc.setFontSize(9).setTextColor(120);
-  doc.text("A system generated report by MyBudgetPal", 12, pageH / 2, { angle: 90 });
-  doc.setTextColor(0);
-
-  let y = margin + 70;
-
+  // helpers
+  const fmtLKR = (n) =>
+    (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const moneyRs = (centsOrRs, isCents = true) => {
+    const rupees = isCents ? (Number(centsOrRs) || 0) / 100 : Number(centsOrRs) || 0;
+    return `LKR ${fmtLKR(rupees)}`;
+  };
   const fmtDate = (dStr) => (dStr ? new Date(dStr).toLocaleDateString() : "—");
+  const humanDateTime = new Date().toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+  const buildFilenameLocal = (prefix, data) => {
+    const d = new Date();
+    const parts = [prefix || "Report"];
+    if (data?.period) parts.push(String(data.period).replace(/\s+/g, ""));
+    if (data?.from) parts.push(String(data.from).slice(0, 10));
+    if (data?.to) parts.push(String(data.to).slice(0, 10));
+    parts.push(d.toISOString().replace(/[:T]/g, "-").slice(0, 15));
+    return parts.filter(Boolean).join("_") + ".pdf";
+  };
 
-  // Filters block (from your UI state)
+  // Track if we've drawn the initial footer
+  let initialFooterDrawn = false;
+
+  // footer (Generated left, Page x of y right)
+  const drawFooter = () => {
+    // Only draw footer once per page
+    if (initialFooterDrawn) return;
+    
+    doc.setDrawColor(235).setLineWidth(1);
+    doc.line(margin, pageH - 40, pageW - margin, pageH - 40);
+
+    doc.setFontSize(9).setTextColor(120);
+    doc.text(`Generated: ${humanDateTime}`, margin, pageH - 22);
+
+    const pageStr = `Page ${doc.internal.getNumberOfPages()} of ${TOTAL_PAGES_TOKEN}`;
+    const pageX = pageW - margin - 60;
+    doc.text(pageStr, pageX, pageH - 22, { align: "right" });
+
+    doc.setTextColor(slateTxt);
+    initialFooterDrawn = true;
+  };
+
+  // Reset footer flag for new pages
+  const resetFooterFlag = () => {
+    initialFooterDrawn = false;
+  };
+
+  // ---- header (logo + brand + INDIGO separator) ----
+  const logoSize = 46;
+  const headerY = margin;
+
+  try {
+    const logoData =
+      (typeof loadImageDataURL === "function") ? await loadImageDataURL(logoUrl) : null;
+    if (logoData) {
+      try { doc.addImage(logoData, "PNG", margin, headerY, logoSize, logoSize); } catch {}
+    }
+  } catch {}
+
+  const headerTextX = margin + logoSize + 12;
+  doc.setFont("helvetica", "bold").setFontSize(22).setTextColor(slateTxt);
+  doc.text("My Budget Pal", headerTextX, headerY + 30);
+
+  const sepY = headerY + logoSize + 12;
+  doc.setDrawColor(brand.r, brand.g, brand.b).setLineWidth(2); // purple line
+  doc.line(margin, sepY, pageW - margin, sepY);
+
+  // centered title
+  const titleY = sepY + 28;
+  doc.setFont("helvetica", "bold").setFontSize(20).setTextColor(slateTxt);
+  doc.text("Event Expenses Report", pageW / 2, titleY, { align: "center" });
+
+  // ---- soft filter panel (indigo-50) ----
   const rangeLabel =
-    filters?.from || filters?.to
-      ? `${fmtDate(filters?.from || "")}  -  ${fmtDate(filters?.to || "")}`
-      : "____________  -  ____________";
+    (filters?.from || filters?.to) ? `${fmtDate(filters?.from)} – ${fmtDate(filters?.to)}` : "… – …";
   const modeLabel = filters?.mode ? (filters.mode === "single" ? "Single" : "Itemized") : "All";
   const dateFieldLabel = filters?.dateField === "due" ? "Due Date" : "Created Date";
 
-  doc.setFont("helvetica", "normal").setFontSize(11);
-  doc.text(`Scoped Month (Created): ${period || "—"}`, margin, y);
-  y += 16;
-  doc.text(`Date range       : ${rangeLabel}`, margin, y);
-  y += 16;
-  doc.text(`Filter option 1  : Mode = ${modeLabel}`, margin, y);
-  y += 16;
-  doc.text(`Filter option 2  : Date field = ${dateFieldLabel}`, margin, y);
-  y += 24;
+  const filterLines = [
+    `Period : ${period || "—"}`,
+    `Range  : ${rangeLabel}`,
+    `Mode   : ${modeLabel}`,
+    `Date field : ${dateFieldLabel}`,
+  ];
 
-  // Single Item Events
-  const singles = rows.filter((e) => e.mode === "single");
+  const boxX = margin;
+  const boxY = titleY + 20;
+  const lineH = 14;
+  const boxH = (filterLines.length || 1) * lineH + 16;
+  const boxW = pageW - margin * 2;
+
+  doc.setDrawColor(230).setFillColor(brandLight.r, brandLight.g, brandLight.b);
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6, 6, "F");
+
+  doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(100);
+  let fy = boxY + 12;
+  filterLines.forEach((line) => { doc.text(line, boxX + 10, fy + 10); fy += lineH; });
+  doc.setTextColor(slateTxt);
+
+  // watermark (left)
+  doc.setFontSize(10).setTextColor(120);
+  doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+  doc.setTextColor(slateTxt);
+
+  // Draw initial footer
+  drawFooter();
+
+  // ---- tables (purple headers) ----
+  let cursorY = boxY + boxH + 22;
+
+  const singles = (rows || []).filter((e) => e.mode === "single");
+  const itemized = (rows || []).filter((e) => e.mode === "itemized");
+
   let singleTotalC = 0;
+  let itemizedGrandC = 0;
 
+  const ensureSpace = (needed = 140) => {
+    if (cursorY + needed > pageH - margin) {
+      doc.addPage();
+      resetFooterFlag(); // Reset flag for new page
+      // re-watermark only
+      doc.setFontSize(10).setTextColor(120);
+      doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+      doc.setTextColor(slateTxt);
+      cursorY = margin;
+      // Draw footer on new page
+      drawFooter();
+    }
+  };
+
+  const tableCommon = {
+    theme: "grid",
+    margin: { left: margin, right: margin },
+    styles: {
+      fontSize: 9,
+      cellPadding: 4,
+      lineColor: [230, 230, 230],
+      lineWidth: 0.5,
+      textColor: [40, 40, 40],
+      valign: "middle",
+    },
+    headStyles: {
+      fillColor: [brand.r, brand.g, brand.b],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      halign: "left",
+    },
+    alternateRowStyles: { fillColor: [247, 248, 250] },
+    // REMOVED didDrawPage callback to prevent duplicate footer drawing
+  };
+
+  // --- Single Item Events table ---
   if (singles.length) {
-    doc.setFont("helvetica", "bold").setFontSize(13).text("Single Item Events", margin, y);
-    y += 10;
+    ensureSpace(100);
+    doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(slateTxt);
+    doc.text("Single Item Events", margin, cursorY);
+    cursorY += 10;
 
-    const head = [["Title", "DueDate", "StartDate", "EndDate", "Amount (LKR)"]];
+    const head = [["Title", "Due Date", "Start Date", "End Date", "Amount (LKR)"]];
     const body = singles.map((e) => {
       singleTotalC += e.targetCents || 0;
       return [
-        e.title,
-        e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—",
-        e?.dates?.start ? new Date(e.dates.start).toLocaleDateString() : "—",
-        e?.dates?.end ? new Date(e.dates.end).toLocaleDateString() : "—",
-        currency(e.targetCents, e.currency || "LKR"),
+        e.title || "—",
+        fmtDate(e?.dates?.due),
+        fmtDate(e?.dates?.start),
+        fmtDate(e?.dates?.end),
+        moneyRs(e.targetCents || 0, true),
       ];
     });
 
     autoTable(doc, {
-      startY: y + 8,
+      ...tableCommon,
+      startY: cursorY + 6,
       head,
       body,
-      theme: "grid",
-      styles: { fontSize: 9, cellPadding: 3 },
-      headStyles: { fillColor: [242, 246, 252], textColor: 40 },
-      margin: { left: margin, right: margin },
+      columnStyles: { 4: { halign: "right" } },
     });
+    cursorY = (doc.lastAutoTable?.finalY || cursorY) + 14;
 
-    y = doc.lastAutoTable.finalY + 16;
-    doc.setFont("helvetica", "normal").setFontSize(11);
-    doc.text(`Single Event total = ${currency(singleTotalC)}`, margin, y);
-    y += 24;
+    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(slateTxt);
+    doc.text(`Subtotal (Single) : ${moneyRs(singleTotalC, true)}`, margin, cursorY);
+    cursorY += 24;
   }
 
-  // Itemized Events
-  const itemized = rows.filter((e) => e.mode === "itemized");
-  let itemizedGrandC = 0;
-
+  // --- Itemized Events (multiple subtables) ---
   if (itemized.length) {
-    doc.setFont("helvetica", "bold").setFontSize(13).text("Itemized Events", margin, y);
-    y += 8;
+    ensureSpace(100);
+    doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(slateTxt);
+    doc.text("Itemized Events", margin, cursorY);
+    cursorY += 8;
 
     itemized.forEach((e, idx) => {
-      const head = [["Title", "DueDate", "StartDate", "EndDate", "Item", "Amount (LKR)"]];
+      ensureSpace(120);
+
+      const head = [["Title", "Due Date", "Start Date", "End Date", "Item", "Amount (LKR)"]];
       let subTotalC = 0;
+
       const body = (e.subItems || []).map((s) => {
-        const amt = Number(s.targetCents || 0);
-        subTotalC += amt;
+        const amtC = Number(s.targetCents || 0);
+        subTotalC += amtC;
         return [
-          e.title,
-          e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—",
-          e?.dates?.start ? new Date(e.dates.start).toLocaleDateString() : "—",
-          e?.dates?.end ? new Date(e.dates.end).toLocaleDateString() : "—",
+          e.title || "—",
+          fmtDate(e?.dates?.due),
+          fmtDate(e?.dates?.start),
+          fmtDate(e?.dates?.end),
           s.name || "—",
-          currency(amt, e.currency || "LKR"),
+          moneyRs(amtC, true),
         ];
       });
 
-      // If no subitems, still list the event row with a blank item
       if (body.length === 0) {
-        subTotalC += Number(e.targetCents || 0);
+        const amtC = Number(e.targetCents || 0);
+        subTotalC += amtC;
         body.push([
-          e.title,
-          e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—",
-          e?.dates?.start ? new Date(e.dates.start).toLocaleDateString() : "—",
-          e?.dates?.end ? new Date(e.dates.end).toLocaleDateString() : "—",
+          e.title || "—",
+          fmtDate(e?.dates?.due),
+          fmtDate(e?.dates?.start),
+          fmtDate(e?.dates?.end),
           "(no items)",
-          currency(e.targetCents || 0, e.currency || "LKR"),
+          moneyRs(amtC, true),
         ]);
       }
 
       autoTable(doc, {
-        startY: y + (idx === 0 ? 6 : 2),
+        ...tableCommon,
+        startY: cursorY + (idx === 0 ? 6 : 2),
         head,
         body,
-        theme: "grid",
-        styles: { fontSize: 9, cellPadding: 3 },
-        headStyles: { fillColor: [242, 246, 252], textColor: 40 },
-        margin: { left: margin, right: margin },
+        columnStyles: { 5: { halign: "right" } },
       });
 
-      y = doc.lastAutoTable.finalY + 16;
-      doc.setFont("helvetica", "normal").setFontSize(11);
-      doc.text(`Total for ${e.title} = ${currency(subTotalC)}`, margin, y);
-      y += 32;
+      cursorY = (doc.lastAutoTable?.finalY || cursorY) + 14;
+      doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(slateTxt);
+      doc.text(`Total for ${e.title || "event"} : ${moneyRs(subTotalC, true)}`, margin, cursorY);
+      cursorY += 28;
 
       itemizedGrandC += subTotalC;
     });
 
-    doc.setFont("helvetica", "bold").setFontSize(12);
-    doc.text(`Total For Itemized Events = ${currency(itemizedGrandC)}`, margin, y);
-    y += 16;
+    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(slateTxt);
+    doc.text(`Subtotal (Itemized) : ${moneyRs(itemizedGrandC, true)}`, margin, cursorY);
+    cursorY += 24;
   }
 
-  // GRAND TOTALS
-  const grandTotalC = singleTotalC + itemizedGrandC;
-  const numberOfEvents = rows.length;
+  // ---- Summary (purple rules) ----
+  ensureSpace(140);
 
-  doc.setFont("helvetica", "bold").setFontSize(12);
-  doc.text(`All Total Event Expenses = ${currency(grandTotalC)}`, margin, y);
-  y += 16;
-  doc.text(`Number Of Events = ${numberOfEvents}`, margin, y);
-  y += 40;
+  doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(slateTxt);
+  doc.text("Summary", margin, cursorY);
+  cursorY += 10;
 
-  // Signature
-  doc.setFont("helvetica", "normal").setFontSize(12);
-  doc.text("Signature : ...........................................", margin, pageH - 60);
+  doc.setDrawColor(brand.r, brand.g, brand.b).setLineWidth(1.2);
+  doc.line(margin, cursorY, pageW - margin, cursorY);
+  cursorY += 14;
 
-  // Footer page number
-  const pageCount = doc.internal.getNumberOfPages();
-  doc.setFontSize(9);
-  doc.text(`Page ${pageCount}`, pageW - margin, pageH - 16, { align: "right" });
+  const grandTotalC = (singleTotalC || 0) + (itemizedGrandC || 0);
+  const summaryRows = [
+    ["Single Total", moneyRs(singleTotalC, true)],
+    ["Itemized Total", moneyRs(itemizedGrandC, true)],
+    ["All Total Event Expenses", moneyRs(grandTotalC, true)],
+    ["Number of Events", String((rows || []).length)],
+  ];
 
-  // Save
-  const fn = makeReportFilename("EventExpensesReport");
+  doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(60);
+  const labelX = margin + 10;
+  const labelWidths = summaryRows.map(([lbl]) => doc.getTextWidth(lbl));
+  const maxLabelW = Math.max(...labelWidths);
+  const colonX = labelX + maxLabelW + 6;
+  const valueAnchor = Math.min(pageW - margin - 40, colonX + 10 + 220);
+  const lineGap = 18;
+
+  summaryRows.forEach(([label, value]) => {
+    doc.text(label, labelX, cursorY);
+    doc.text(":", colonX, cursorY);
+    doc.text(value, valueAnchor, cursorY, { align: "right" });
+    cursorY += lineGap;
+  });
+
+  doc.setDrawColor(brand.r, brand.g, brand.b).setLineWidth(1.2);
+  doc.line(margin, cursorY, pageW - margin, cursorY);
+  cursorY += 24;
+
+  // ---- Signature (bottom-aligned) ----
+  let sigY = pageH - 68;
+  if (sigY - cursorY < 40) {
+    doc.addPage();
+    resetFooterFlag(); // Reset flag for new page
+    // re-watermark only
+    doc.setFontSize(10).setTextColor(120);
+    doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+    doc.setTextColor(slateTxt);
+    sigY = pageH - 68;
+    // Draw footer on new page
+    drawFooter();
+  }
+  doc.setFont("helvetica", "normal").setFontSize(12).setTextColor(slateTxt);
+  doc.text("Authorized Signature : ____________________________________", margin, sigY);
+
+  // Ensure footer is drawn on the last page
+  if (!initialFooterDrawn) {
+    drawFooter();
+  }
+
+  if (typeof doc.putTotalPages === "function") doc.putTotalPages(TOTAL_PAGES_TOKEN);
+
+  const fn = buildFilenameLocal("EventExpensesReport", {
+    period,
+    from: filters?.from,
+    to: filters?.to,
+  });
   doc.save(fn);
 }
-
 /* ===================== PROGRESS BARS ===================== */
-function Bar({ value, max, hard = false }) {
-  const pct = max > 0 ? value / max : 0;
-  const w = `${clamp01(pct) * 100}%`;
-  const color = pct <= 0.85 ? "bg-emerald-500" : pct <= 1 ? "bg-amber-500" : "bg-rose-500";
-  const ring = hard && pct > 1 ? "ring-2 ring-rose-400" : "";
+function Bar({ value = 0, max = 0, hard = false }) {
+  const pctRaw = max > 0 ? value / max : 0;
+  const pct = Math.max(0, Math.min(1, pctRaw)); // clamp 0–100%
+
+  const [w, setW] = React.useState(0);
+
+  // Animate from 0 → target whenever value/max changes
+  React.useEffect(() => {
+    setW(0);
+    const id = requestAnimationFrame(() => setW(pct));
+    return () => cancelAnimationFrame(id);
+  }, [pct]);
+
+  const over = pctRaw > 1;
+  const warn = !over && pctRaw >= 0.85;
+
+  // choose fill color
+  const fill =
+    over ? "from-rose-500 to-rose-400"
+    : warn ? "from-amber-500 to-amber-400"
+    : "from-emerald-500 to-emerald-400";
+
   return (
-    <div className={`h-2 w-full rounded-full bg-slate-200 overflow-hidden ${ring}`}>
-      <div className={`h-full ${color}`} style={{ width: w }} />
+    <div
+      className={[
+        "relative h-2 w-full rounded-full bg-slate-200/80 overflow-hidden",
+        hard && over ? "ring-2 ring-rose-400" : "",
+      ].join(" ")}
+      role="progressbar"
+      aria-valuenow={Math.round(pct * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      {/* fill */}
+      <div
+        className={[
+          "h-full rounded-full bg-gradient-to-r",
+          "transition-[width] duration-700 ease-out",
+          "motion-reduce:transition-none",
+          fill,
+        ].join(" ")}
+        style={{ width: `${w * 100}%` }}
+        aria-hidden
+      />
+
+      {/* optional subtle hatch when hard cap */}
+      {hard && (
+        <div
+          className="pointer-events-none absolute inset-0 rounded-full"
+          aria-hidden
+          style={{
+            background:
+              "repeating-linear-gradient(45deg, transparent 0 8px, rgba(255,255,255,.45) 8px 16px)",
+            mixBlendMode: "overlay",
+          }}
+        />
+      )}
     </div>
   );
 }
 
 /* ===================== Create/Edit Event Modal ===================== */
+// --- shared helpers (module scope) ---
+const cleanAmount = (s) => (s || "").replace(/,/g, "");
+const moneyRegex = /^\d{0,15}(\.\d{0,2})?$/; // up to 2 decimals
+
+const formatCommas = (raw, keepDot = false) => {
+  if (!raw) return "";
+  const [i = "0", d = ""] = raw.split(".");
+  const intClean = (i || "0").replace(/^0+(?=\d)/, "") || "0";
+  const grouped = intClean.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  if (keepDot) return `${grouped}.`;
+  return d !== "" ? `${grouped}.${d}` : grouped;
+};
+
+const toNumber = (s) => {
+  const raw = cleanAmount(s);
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const toLocalYMD = (d) => {
+  const dt = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return dt.toISOString().slice(0, 10);
+};
+
+// caret helpers
+const nonCommaCountBefore = (str, caret) => {
+  let count = 0;
+  for (let i = 0; i < caret; i++) if (str[i] !== ",") count++;
+  return count;
+};
+const caretFromNonCommaCount = (str, n) => {
+  if (n <= 0) return 0;
+  let count = 0;
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] !== ",") count++;
+    if (count >= n) return i + 1;
+  }
+  return str.length;
+};
+
+// ---------- HOISTED COMPONENT (fixes focus loss) ----------
+function MoneyInput({ value, onValue, cap = Infinity, placeholder = "0.00", "data-test": dataTest }) {
+  const inputRef = React.useRef(null);
+  const [tip, setTip] = React.useState("");
+  const [showTip, setShowTip] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!showTip) return;
+    const t = setTimeout(() => setShowTip(false), 1500);
+    return () => clearTimeout(t);
+  }, [showTip]);
+
+  const onKeyDown = (e) => {
+    if (["-", "e", "E", "+"].includes(e.key)) e.preventDefault();
+  };
+  const onPaste = (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    const raw = cleanAmount(text);
+    if (!moneyRegex.test(raw) || raw.startsWith(".")) e.preventDefault();
+  };
+  const onChange = (e) => {
+    const el = e.target;
+    const before = el.value;
+    const caret = el.selectionStart ?? before.length;
+    const nonCommaLeft = nonCommaCountBefore(before, caret);
+
+    const raw = cleanAmount(before);
+    if (raw === "") {
+      onValue("");
+      requestAnimationFrame(() => {
+        const n = inputRef.current;
+        if (n) n.setSelectionRange(0, 0);
+      });
+      return;
+    }
+
+    if (!/^\d*\.?\d*$/.test(raw)) return; // digits + one dot
+    if (raw.startsWith(".")) return;      // no leading dot
+
+    const [_, d = ""] = raw.split(".");
+    if (d.length > 2) return;             // max 2 dp
+
+    const candidate = Number(raw);
+    if (!Number.isFinite(candidate)) return;
+
+    const hardCap = Math.max(0, Number(cap ?? 0));
+    let nextStr;
+    if (candidate > hardCap) {
+      const capDecLen = Math.min(2, (String(hardCap).split(".")[1] || "").length);
+      const capped = hardCap.toFixed(capDecLen);
+      nextStr = formatCommas(capped);
+      setTip(`Capped at ${formatCommas(hardCap.toFixed(2))}`);
+      setShowTip(true);
+    } else {
+      const keepDot = raw.endsWith(".") && raw.includes(".") && d.length === 0;
+      nextStr = formatCommas(raw, keepDot);
+    }
+
+    onValue(nextStr);
+
+    // restore caret after React re-render
+    requestAnimationFrame(() => {
+      const n = inputRef.current;
+      if (!n) return;
+      const newCaret = caretFromNonCommaCount(nextStr, nonCommaLeft);
+      n.setSelectionRange(newCaret, newCaret);
+    });
+  };
+  const onBlur = () => {
+    const raw = cleanAmount(value);
+    if (!raw) return;
+    let n = Math.min(Number(raw), Math.max(0, Number(cap ?? 0)));
+    if (!Number.isFinite(n) || n < 0) n = 0;
+    const fixed = formatCommas(n.toFixed(2));
+    onValue(fixed);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) {
+        const end = fixed.length;
+        el.setSelectionRange(end, end);
+      }
+    });
+  };
+
+  return (
+    <div className="relative">
+      <input
+        ref={inputRef}
+        className="w-full rounded-xl border border-slate-300 px-3 py-2"
+        inputMode="decimal"
+        value={value}
+        onKeyDown={onKeyDown}
+        onPaste={onPaste}
+        onChange={onChange}
+        onBlur={onBlur}
+        placeholder={placeholder}
+        data-test={dataTest}
+      />
+      {showTip && (
+        <div className="absolute -top-2 right-0 translate-y-[-100%] max-w-[240px]">
+          <div className="px-2 py-1 text-xs rounded-md bg-rose-50 text-rose-700 border border-rose-200 shadow-sm">
+            {tip}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===================== YOUR FORM (unchanged API) =====================
 function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
   const isEdit = !!initial?._id;
 
-  const [f, setF] = useState({
+  const [f, setF] = React.useState({
     _id: null,
     title: "",
-    mode: "single", // single | itemized
+    mode: "single",
     primaryAccountId: accounts[0]?._id || "",
     currency: "LKR",
     startDate: "",
     endDate: "",
     dueDate: "",
     notes: "",
-    target: "", // for single
-    subItems: [{ name: "Gift", target: "" }], // for itemized
+    target: "",
+    subItems: [{ name: "Gift", target: "" }],
   });
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     if (initial) {
       setF({
         _id: initial._id,
-        title: initial.title || "",
+        title: (initial.title || "").replace(/[^A-Za-z ]/g, "").slice(0, 100),
         mode: initial.mode || "single",
         primaryAccountId: initial.primaryAccountId || (accounts[0]?._id || ""),
         currency: initial.currency || "LKR",
-        startDate: ymd(initial?.dates?.start),
-        endDate: ymd(initial?.dates?.end),
-        dueDate: ymd(initial?.dates?.due),
+        startDate: initial?.dates?.start ? toLocalYMD(new Date(initial.dates.start)) : "",
+        endDate: initial?.dates?.end ? toLocalYMD(new Date(initial.dates.end)) : "",
+        dueDate: initial?.dates?.due ? toLocalYMD(new Date(initial.dates.due)) : "",
         notes: initial.notes || "",
-        target: fromCents(initial.targetCents || 0),
+        target: formatCommas((Number(fromCents(initial.targetCents || 0)) || 0).toFixed(2)),
         subItems:
           (initial.mode || "single") === "itemized"
-            ? (initial.subItems || []).map((s) => ({ id: s._id, name: s.name, target: fromCents(s.targetCents || 0) }))
+            ? (initial.subItems || []).map((s) => ({
+              id: s._id,
+              name: s.name,
+              target: formatCommas((Number(fromCents(s.targetCents || 0)) || 0).toFixed(2)),
+            }))
             : [{ name: "Gift", target: "" }],
       });
     } else {
@@ -339,18 +757,36 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
     }
   }, [open, initial, accounts]);
 
-  const itemizedTotal = useMemo(
-    () => (f.subItems || []).reduce((sum, it) => sum + Number(it.target || 0), 0),
+  const handleTitle = (e) => {
+    const next = e.target.value.replace(/[^A-Za-z ]/g, "").slice(0, 100);
+    setF({ ...f, title: next });
+  };
+
+  const itemizedTotal = React.useMemo(
+    () => (f.subItems || []).reduce((sum, it) => sum + toNumber(it.target), 0),
     [f.subItems]
   );
-  const targetRupees = f.mode === "single" ? Number(f.target || 0) : itemizedTotal;
+  const targetRupees = f.mode === "single" ? toNumber(f.target) : itemizedTotal;
   const targetCents = toCents(targetRupees);
 
   const selectedAcc = accounts.find((a) => a._id === f.primaryAccountId);
   const accBalCents = Number(selectedAcc?.balanceCents || 0);
-  const insufficientAccount = targetCents > accBalCents;
+  const accBalRupees = accBalCents / 100;
 
-  // Budget context for warnings (not blocking on create; blocking happens on FUND)
+  const singleCap = accBalRupees;
+  const capForRow = (index) => {
+    const others = (f.subItems || []).reduce(
+      (s, it, i) => (i === index ? s : s + toNumber(it.target)),
+      0
+    );
+    return Math.max(0, accBalRupees - others);
+  };
+
+  const insufficientAccount =
+    f.mode === "single"
+      ? targetCents > accBalCents
+      : toCents(itemizedTotal) > accBalCents;
+
   const capC = toCents(Number(budget?.events?.amount || 0));
   const usedC = Number(budget?._usedEventsCents || 0);
   const earmarkedC = Number(budget?._earmarkedEventsCents || 0);
@@ -362,7 +798,9 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
     if (!f.title?.trim()) return alert("Title is required");
     if (!f.dueDate) return alert("Due date is required");
     if (!f.primaryAccountId) return alert("Select an account");
-    if (insufficientAccount) return alert("Insufficient funds in the selected account to cover the event target.");
+    if (insufficientAccount)
+      return alert("Insufficient funds in the selected account to cover the event target.");
+
     const payload = {
       title: f.title.trim(),
       mode: f.mode,
@@ -375,18 +813,24 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
       },
       notes: f.notes?.trim() || "",
     };
+
     if (f.mode === "single") {
-      payload.targetCents = toCents(f.target);
-      payload.subItems = [];
+      payload.targetCents = toCents(toNumber(f.target) || 0);
     } else {
       const subItems = (f.subItems || []).filter((s) => s.name?.trim());
-      payload.subItems = subItems.map((s) => ({ name: s.name.trim(), targetCents: toCents(s.target || 0) }));
-      payload.targetCents = payload.subItems.reduce((a, b) => a + b.targetCents, 0);
+      payload.subItems = subItems.map((s) => {
+        const one = { name: s.name.trim(), targetCents: toCents(toNumber(s.target) || 0) };
+        if (s.id) one._id = s.id;
+        return one;
+      });
     }
 
     if (isEdit) await onSave(f._id, payload);
     else await onSave(null, payload);
   };
+
+  const minDate = toLocalYMD(new Date());
+  const maxDate = toLocalYMD(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
 
   return (
     <Modal open={open} onClose={onClose} title={isEdit ? "Edit Event" : "Add Event"} max="max-w-3xl">
@@ -396,9 +840,12 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.title}
-              onChange={(e) => setF({ ...f, title: e.target.value })}
-              placeholder="Sahan’s Wedding"
+              onChange={handleTitle}
+              placeholder="Sahan Wedding"
               required
+              maxLength={100}
+              pattern="^[A-Za-z ]{1,100}$"
+              title="Only letters and spaces, up to 100 characters"
             />
           </Field>
           <Field label="Mode" required>
@@ -408,9 +855,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
                   key={m}
                   type="button"
                   onClick={() => setF({ ...f, mode: m })}
-                  className={`px-3 py-2 rounded-xl border ${
-                    f.mode === m ? "bg-indigo-600 text-white border-indigo-600" : "bg-white"
-                  }`}
+                  className={`px-3 py-2 rounded-xl border ${f.mode === m ? "bg-blue-600 text-white border-blue-600" : "bg-white"
+                    }`}
                 >
                   {m === "single" ? "Single amount" : "Itemized"}
                 </button>
@@ -445,10 +891,10 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
           </Field>
           <Field label="Currency">
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 bg-slate-50 text-slate-600"
               value={f.currency}
-              onChange={(e) => setF({ ...f, currency: e.target.value.toUpperCase() })}
-              placeholder="LKR"
+              readOnly
+              disabled
             />
           </Field>
           <Field label="Due date" required>
@@ -456,6 +902,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.dueDate}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setF({ ...f, dueDate: e.target.value })}
               required
             />
@@ -468,6 +916,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.startDate}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setF({ ...f, startDate: e.target.value })}
             />
           </Field>
@@ -476,6 +926,8 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={f.endDate}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setF({ ...f, endDate: e.target.value })}
             />
           </Field>
@@ -483,15 +935,12 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
 
         {f.mode === "single" ? (
           <Field label="Target amount" required>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            <MoneyInput
               value={f.target}
-              onChange={(e) => setF({ ...f, target: e.target.value })}
-              placeholder="15000.00"
-              required
+              onValue={(v) => setF({ ...f, target: v })}
+              cap={singleCap}
+              placeholder="150,000.00"
+              data-test="single-target"
             />
           </Field>
         ) : (
@@ -500,7 +949,7 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
               <span className="text-sm font-medium text-slate-700">Sub-items</span>
               <button
                 type="button"
-                className="px-3 py-1.5 rounded-xl border"
+                className="px-3 py-1.5 rounded-xl border bg-blue-600 text-white hover:bg-blue-700"
                 onClick={() => setF({ ...f, subItems: [...f.subItems, { name: "", target: "" }] })}
               >
                 + Add
@@ -518,22 +967,22 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
                     setF({ ...f, subItems: x });
                   }}
                 />
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  className="col-span-4 rounded-xl border border-slate-300 px-3 py-2"
-                  placeholder="0.00"
-                  value={s.target}
-                  onChange={(e) => {
-                    const x = [...f.subItems];
-                    x[i].target = e.target.value;
-                    setF({ ...f, subItems: x });
-                  }}
-                />
+                <div className="col-span-4">
+                  <MoneyInput
+                    value={s.target}
+                    onValue={(v) => {
+                      const x = [...f.subItems];
+                      x[i].target = v;
+                      setF({ ...f, subItems: x });
+                    }}
+                    cap={capForRow(i)}
+                    placeholder="0.00"
+                    data-test={`sub-${i}-target`}
+                  />
+                </div>
                 <button
                   type="button"
-                  className="col-span-1 rounded-xl border"
+                  className="col-span-1 rounded-xl border bg-blue-600 text-white hover:bg-blue-700"
                   onClick={() => setF({ ...f, subItems: f.subItems.filter((_, j) => j !== i) })}
                   title="Remove"
                 >
@@ -547,7 +996,6 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
           </div>
         )}
 
-        {/* Account balance guard (blocks Save) */}
         {selectedAcc && targetCents > 0 && targetCents > (selectedAcc.balanceCents || 0) && (
           <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2">
             Insufficient funds in <b>{selectedAcc.name}</b>. Needed {currency(targetCents, f.currency)}, available{" "}
@@ -555,10 +1003,9 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
           </div>
         )}
 
-        {/* Budget warning (warn-only on create) */}
         {showBudgetWarn && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-            Heads up: This event’s target ({currency(targetCents, f.currency)}) exceeds your remaining Events budget for{" "}
+            Heads up: This event's target ({currency(targetCents, f.currency)}) exceeds your remaining Events budget for{" "}
             {budget?.period}.
           </div>
         )}
@@ -576,10 +1023,17 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            className={`px-4 py-2 rounded-xl text-white ${
-              insufficientAccount ? "bg-slate-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"
-            }`}
-            disabled={insufficientAccount}
+            className={`px-4 py-2 rounded-xl text-white ${(f.mode === "single"
+              ? targetCents > accBalCents
+              : toCents(itemizedTotal) > accBalCents)
+              ? "bg-slate-400 cursor-not-allowed"
+              : "bg-blue-600 hover:bg-blue-700"
+              }`}
+            disabled={
+              f.mode === "single"
+                ? targetCents > accBalCents
+                : toCents(itemizedTotal) > accBalCents
+            }
           >
             Save
           </button>
@@ -592,14 +1046,23 @@ function EventForm({ open, onClose, onSave, accounts, initial, budget }) {
   );
 }
 
+
+// parse to number (safe for 2dp strings)
+const toNumberRupees = (s) => {
+  const raw = cleanAmount(s);
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+};
+
 /* ===================== Fund (enforces budget cap) ===================== */
 function FundModal({ open, onClose, onSave, accounts, event, budget }) {
-  const [accountId, setAccountId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(ymd(new Date()));
-  const [note, setNote] = useState("");
+  const [accountId, setAccountId] = React.useState("");
+  const [amount, setAmount] = React.useState(""); // RUPEES string with commas
+  const [date, setDate] = React.useState(ymd(new Date())); // keep your util for initial value
+  const [note, setNote] = React.useState("");
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
     setAmount("");
@@ -608,34 +1071,49 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
   }, [open, event, accounts]);
 
   const selectedAcc = accounts.find((a) => a._id === accountId);
-  const amountCents = toCents(amount);
 
-  // Target remaining for this event
-  const remainingTargetCents = Math.max(0, (event?.targetCents || 0) - (event?.fundedCents || 0));
+  // amounts in CENTS for guards
+  const amountCents = toCents(toNumberRupees(amount));
+
+  const remainingTargetCents = Math.max(
+    0,
+    (event?.targetCents || 0) - (event?.fundedCents || 0)
+  );
+
   const insufficientAccount = (selectedAcc?.balanceCents || 0) < amountCents;
   const overEventTarget = amountCents > remainingTargetCents;
 
-  // Budget hard/soft cap check
+  // Budget hard/soft cap
   const capC = toCents(Number(budget?.events?.amount || 0));
   const usedC = Number(budget?._usedEventsCents || 0);
   const earmarkedC = Number(budget?._earmarkedEventsCents || 0);
   const remainingBudgetC = Math.max(0, capC - usedC - earmarkedC);
-
   const overBudget = amountCents > remainingBudgetC && capC > 0;
   const hardCap = !!budget?.events?.hardCap;
 
+  // live cap while typing (rupees): min(account, remaining target, (hard cap ? remaining budget : ∞))
   const maxAllowedByAccount = selectedAcc?.balanceCents || 0;
   const maxAllowedByEvent = remainingTargetCents;
   const maxAllowedByBudget = hardCap ? remainingBudgetC : Infinity;
-  const maxAllowed = Math.min(maxAllowedByAccount, maxAllowedByEvent, maxAllowedByBudget);
-  const maxAllowedRupees = (maxAllowed / 100).toFixed(2);
+  const maxAllowedCents = Math.min(maxAllowedByAccount, maxAllowedByEvent, maxAllowedByBudget);
+  const maxAllowedRupees = (maxAllowedCents / 100) || 0;
+
+  // date limits: today .. +30 days
+  const minDate = toLocalYMD(new Date());
+  const maxDate = toLocalYMD(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+  const disableSubmit =
+    amountCents <= 0 ||
+    insufficientAccount ||
+    overEventTarget ||
+    (hardCap && overBudget);
 
   return (
     <Modal open={open} onClose={onClose} title={`Fund: ${event?.title || ""}`}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (insufficientAccount || overEventTarget || (hardCap && overBudget)) return;
+          if (disableSubmit) return;
           await onSave({
             accountId,
             amountCents,
@@ -661,27 +1139,31 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
         </Field>
 
         <div className="grid md:grid-cols-3 gap-4">
-          <Field label="Amount" required hint={`Max: ${currency(maxAllowed, event?.currency || "LKR")}`}>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max={maxAllowedRupees}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+          <Field
+            label="Amount"
+            required
+            hint={`Max: ${currency(maxAllowedCents, event?.currency || "LKR")}`}
+          >
+            <MoneyInput
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onValue={setAmount}
+              cap={maxAllowedRupees}
               placeholder="0.00"
-              required
             />
           </Field>
+
           <Field label="Date" required>
             <input
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={date}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setDate(e.target.value)}
+              required
             />
           </Field>
+
           <Field label="Note">
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -694,7 +1176,7 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
 
         {overEventTarget && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-            You’re trying to fund more than this event’s remaining target. Remaining:{" "}
+            You're trying to fund more than this event's remaining target. Remaining:{" "}
             {currency(remainingTargetCents, event?.currency || "LKR")}.
           </div>
         )}
@@ -718,16 +1200,19 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            className={`px-4 py-2 rounded-xl text-white ${
-              insufficientAccount || overEventTarget || (hardCap && overBudget)
-                ? "bg-slate-400 cursor-not-allowed"
-                : "bg-emerald-600 hover:bg-emerald-700"
-            }`}
-            disabled={insufficientAccount || overEventTarget || (hardCap && overBudget)}
+            className={`px-4 py-2 rounded-xl text-white ${disableSubmit
+              ? "bg-slate-400 cursor-not-allowed"
+              : "bg-blue-600 hover:bg-blue-700"
+              }`}
+            disabled={disableSubmit}
           >
             Add Funds
           </button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-xl border border-slate-300"
+            onClick={onClose}
+          >
             Cancel
           </button>
         </div>
@@ -738,12 +1223,12 @@ function FundModal({ open, onClose, onSave, accounts, event, budget }) {
 
 /* ===================== Remove Funds (Defund) ===================== */
 function DefundModal({ open, onClose, onSave, accounts, event }) {
-  const [accountId, setAccountId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(ymd(new Date()));
-  const [note, setNote] = useState("");
+  const [accountId, setAccountId] = React.useState("");
+  const [amount, setAmount] = React.useState(""); // RUPEES string with commas
+  const [date, setDate] = React.useState(ymd(new Date())); // keep your existing util for initial
+  const [note, setNote] = React.useState("");
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
     setAmount("");
@@ -751,17 +1236,29 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
     setNote("");
   }, [open, event, accounts]);
 
+  // refundable = funded - spent
   const refundableCents = Math.max(0, (event?.fundedCents || 0) - (event?.spentCents || 0));
-  const amountCents = toCents(amount);
+  const refundableRupees = (refundableCents / 100) || 0;
+
+  // amount in cents from the formatted string
+  const amountCents = toCents(toNumberRupees(amount));
   const overRefundable = amountCents > refundableCents;
-  const maxRefundRupees = (refundableCents / 100).toFixed(2);
+
+  // limit selectable dates: today .. +30 days
+  const minDate = toLocalYMD(new Date());
+  const maxDate = toLocalYMD(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+  const disableSubmit =
+    refundableCents <= 0 ||
+    amountCents <= 0 ||
+    overRefundable;
 
   return (
     <Modal open={open} onClose={onClose} title={`Remove Funds: ${event?.title || ""}`}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (overRefundable || refundableCents <= 0) return;
+          if (disableSubmit) return;
           await onSave({
             accountId,
             amountCents,
@@ -787,27 +1284,32 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
         </Field>
 
         <div className="grid md:grid-cols-3 gap-4">
-          <Field label="Amount" required hint={`Refundable: ${currency(refundableCents, event?.currency || "LKR")}`}>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max={maxRefundRupees}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+          <Field
+            label="Amount"
+            required
+            hint={`Refundable: ${currency(refundableCents, event?.currency || "LKR")}`}
+          >
+            {/* cap while typing to refundable max; comma groups + 2dp via MoneyInput */}
+            <MoneyInput
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onValue={setAmount}
+              cap={refundableRupees}
               placeholder="0.00"
-              required
             />
           </Field>
+
           <Field label="Date" required>
             <input
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={date}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setDate(e.target.value)}
+              required
             />
           </Field>
+
           <Field label="Note">
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -820,21 +1322,32 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
 
         {overRefundable && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-            You can only remove up to what’s unspent. Refundable: {currency(refundableCents, event?.currency || "LKR")}.
+            You can only remove up to what's unspent. Refundable:{" "}
+            {currency(refundableCents, event?.currency || "LKR")}.
+          </div>
+        )}
+        {refundableCents <= 0 && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 text-slate-600 text-sm px-3 py-2">
+            Nothing refundable for this event right now.
           </div>
         )}
 
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            className={`px-4 py-2 rounded-xl text-white ${
-              overRefundable || refundableCents <= 0 ? "bg-slate-400 cursor-not-allowed" : "bg-amber-600 hover:bg-amber-700"
-            }`}
-            disabled={overRefundable || refundableCents <= 0}
+            className={`px-4 py-2 rounded-xl text-white ${disableSubmit
+              ? "bg-slate-400 cursor-not-allowed"
+              : "bg-blue-600 hover:bg-blue-700"
+              }`}
+            disabled={disableSubmit}
           >
             Remove Funds
           </button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-xl border border-slate-300"
+            onClick={onClose}
+          >
             Cancel
           </button>
         </div>
@@ -843,16 +1356,17 @@ function DefundModal({ open, onClose, onSave, accounts, event }) {
   );
 }
 
+
 /* ===================== Spend (blocks > funded - spent) ===================== */
 function SpendModal({ open, onClose, onSave, accounts, event }) {
-  const [accountId, setAccountId] = useState("");
-  const [subItemId, setSubItemId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [merchant, setMerchant] = useState("");
-  const [date, setDate] = useState(ymd(new Date()));
-  const [note, setNote] = useState("");
+  const [accountId, setAccountId] = React.useState("");
+  const [subItemId, setSubItemId] = React.useState("");
+  const [amount, setAmount] = React.useState(""); // RUPEES string with commas via MoneyInput
+  const [merchant, setMerchant] = React.useState("");
+  const [date, setDate] = React.useState(ymd(new Date())); // keep your util for initial value
+  const [note, setNote] = React.useState("");
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
     setAccountId(event?.primaryAccountId || accounts[0]?._id || "");
     setSubItemId("");
@@ -862,21 +1376,33 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
     setNote("");
   }, [open, event, accounts]);
 
-  const remainingFundedCents = Math.max(0, (event?.fundedCents || 0) - (event?.spentCents || 0));
-  const amountCents = toCents(amount);
+  // how much is available to spend (funded - already spent)
+  const remainingFundedCents = Math.max(
+    0,
+    (event?.fundedCents || 0) - (event?.spentCents || 0)
+  );
+  const availableRupees = (remainingFundedCents / 100) || 0;
+
+  // numeric value from formatted input
+  const amountCents = toCents(toNumberRupees(amount));
   const overAvailable = amountCents > remainingFundedCents;
-  const maxSpendRupees = (remainingFundedCents / 100).toFixed(2);
+
+  // limit selectable dates: today .. +30 days
+  const minDate = toLocalYMD(new Date());
+  const maxDate = toLocalYMD(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+  const disableSubmit = amountCents <= 0 || overAvailable;
 
   return (
     <Modal open={open} onClose={onClose} title={`Spend for: ${event?.title || ""}`}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (overAvailable) return;
+          if (disableSubmit) return;
           await onSave({
             accountId,
             subItemId: subItemId || null,
-            amountCents: toCents(amount),
+            amountCents,
             merchant: merchant?.trim() || "",
             date: date ? new Date(date) : new Date(),
             note: note?.trim() || "",
@@ -899,6 +1425,7 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
               ))}
             </select>
           </Field>
+
           {event?.mode === "itemized" && (
             <Field label="Sub-item">
               <select
@@ -918,19 +1445,20 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
         </div>
 
         <div className="grid md:grid-cols-3 gap-4">
-          <Field label="Amount" required hint={`Available: ${currency(remainingFundedCents, event?.currency || "LKR")}`}>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max={maxSpendRupees}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+          <Field
+            label="Amount"
+            required
+            hint={`Available: ${currency(remainingFundedCents, event?.currency || "LKR")}`}
+          >
+            {/* live clamp to available balance; commas + 2dp via MoneyInput */}
+            <MoneyInput
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onValue={setAmount}
+              cap={availableRupees}
               placeholder="0.00"
-              required
             />
           </Field>
+
           <Field label="Merchant">
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
@@ -939,33 +1467,41 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
               placeholder="e.g., ODEL"
             />
           </Field>
+
           <Field label="Date" required>
             <input
               type="date"
               className="w-full rounded-xl border border-slate-300 px-3 py-2"
               value={date}
+              min={minDate}
+              max={maxDate}
               onChange={(e) => setDate(e.target.value)}
+              required
             />
           </Field>
         </div>
 
         {overAvailable && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
-            You can’t spend more than what’s funded. Available: {currency(remainingFundedCents, event?.currency || "LKR")}.
+            You can't spend more than what's funded. Available:{" "}
+            {currency(remainingFundedCents, event?.currency || "LKR")}.
           </div>
         )}
 
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            className={`px-4 py-2 rounded-xl text-white ${
-              overAvailable ? "bg-slate-400 cursor-not-allowed" : "bg-rose-600 hover:bg-rose-700"
-            }`}
-            disabled={overAvailable}
+            className={`px-4 py-2 rounded-xl text-white ${disableSubmit ? "bg-slate-400 cursor-not-allowed" : "bg-red-600 hover:bg-red-700"
+              }`}
+            disabled={disableSubmit}
           >
             Add Expense
           </button>
-          <button type="button" className="px-4 py-2 rounded-xl border border-slate-300" onClick={onClose}>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-xl border border-slate-300"
+            onClick={onClose}
+          >
             Cancel
           </button>
         </div>
@@ -974,45 +1510,62 @@ function SpendModal({ open, onClose, onSave, accounts, event }) {
   );
 }
 
+
 /* ===================== Event Card ===================== */
 function EventCard({ ev, onEdit, onFund, onDefund, onSpend, onDelete }) {
-  const fundedPct = (ev.targetCents || 0) > 0 ? Math.round(((ev.fundedCents || 0) / ev.targetCents) * 100) : 0;
-  const spentPct = (ev.targetCents || 0) > 0 ? Math.round(((ev.spentCents || 0) / ev.targetCents) * 100) : 0;
+  const fundedPct = (ev.targetCents || 0) > 0
+    ? Math.round(((ev.fundedCents || 0) / ev.targetCents) * 100)
+    : 0;
+  const spentPct = (ev.targetCents || 0) > 0
+    ? Math.round(((ev.spentCents || 0) / ev.targetCents) * 100)
+    : 0;
 
-  const hasSpend = (ev.spentCents || 0) > 0;
   const refundableCents = Math.max(0, (ev.fundedCents || 0) - (ev.spentCents || 0));
   const canDefund = refundableCents > 0;
+  const canDelete = (ev.spentCents || 0) === 0 && (ev.fundedCents || 0) === 0;
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between mb-2">
-        <div>
-          <div className="text-lg font-semibold">{ev.title}</div>
-          <div className="text-xs text-slate-500">
-            {ev.mode === "single" ? "Single amount" : "Itemized"} •{" "}
-            {ev?.dates?.due ? `Due ${new Date(ev.dates.due).toLocaleDateString()}` : "No due date"}
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md transition">
+      {/* Title + Target */}
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-lg font-semibold text-slate-900 truncate">{ev.title}</div>
+          <div className="text-xs text-slate-500 mt-1">
+            {ev.mode === "single" ? "Single amount" : "Itemized"}
+          </div>
+          <div className="text-xs text-slate-500 flex items-center gap-1 mt-1">
+            <CalendarDays className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+            <span className="truncate">
+              {ev?.dates?.due
+                ? `Due ${new Date(ev.dates.due).toLocaleDateString()}`
+                : "No due date"}
+            </span>
           </div>
         </div>
-        <div className="text-right">
+        <div className="text-right ml-2 flex-shrink-0">
           <div className="text-xs text-slate-500">Target</div>
-          <div className="font-semibold">{currency(ev.targetCents, ev.currency || "LKR")}</div>
+          <div className="font-semibold text-slate-900 text-sm">
+            {currency(ev.targetCents, ev.currency || "LKR")}
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-2">
+      {/* Progress bars */}
+      <div className="space-y-4 mb-4">
         <div>
-          <div className="flex justify-between text-xs">
+          <div className="flex justify-between text-xs mb-1 text-slate-600">
             <span>Funded</span>
-            <span>
+            <span className="font-medium text-slate-800">
               {currency(ev.fundedCents, ev.currency)} • {fundedPct}%
             </span>
           </div>
           <Bar value={ev.fundedCents || 0} max={ev.targetCents || 1} />
         </div>
+
         <div>
-          <div className="flex justify-between text-xs">
+          <div className="flex justify-between text-xs mb-1 text-slate-600">
             <span>Spent</span>
-            <span>
+            <span className="font-medium text-slate-800">
               {currency(ev.spentCents, ev.currency)} • {spentPct}%
             </span>
           </div>
@@ -1020,32 +1573,58 @@ function EventCard({ ev, onEdit, onFund, onDefund, onSpend, onDelete }) {
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white" onClick={() => onFund(ev)}>
-          + Fund
+      {/* Actions - 2 buttons per row with proper organization */}
+      <div className="grid grid-cols-2 gap-2">
+        {/* Row 1: Primary actions */}
+        <button
+          className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 text-sm"
+          onClick={() => onFund(ev)}
+        >
+          <PlusCircle className="w-4 h-4" />
+          Fund
         </button>
-        {canDefund && (
-          <button className="px-3 py-1.5 rounded-xl bg-amber-600 text-white" onClick={() => onDefund(ev)}>
-            Remove Funds
+        <button
+          className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 text-sm"
+          onClick={() => onSpend(ev)}
+        >
+          <ShoppingCart className="w-4 h-4" />
+          Spend
+        </button>
+
+        {/* Row 2: Secondary actions */}
+        {canDefund ? (
+          <button
+            className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border border-red-300 text-red-700 hover:bg-red-50 text-sm"
+            onClick={() => onDefund(ev)}
+          >
+            <MinusCircle className="w-4 h-4" />
+            Remove
+          </button>
+        ) : (
+          <button
+            className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border border-slate-300 text-slate-500 cursor-not-allowed text-sm"
+            disabled
+          >
+            <MinusCircle className="w-4 h-4" />
+            Remove
           </button>
         )}
-        <button className="px-3 py-1.5 rounded-xl bg-rose-600 text-white" onClick={() => onSpend(ev)}>
-          + Spend
-        </button>
-        <button className="px-3 py-1.5 rounded-xl border" onClick={() => onEdit(ev)}>
+        
+        <button
+          className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-sm"
+          onClick={() => onEdit(ev)}
+        >
+          <Pencil className="w-4 h-4" />
           Edit
         </button>
 
-        {/* Delete: hide if any spend; disable if funded > 0 */}
-        {(ev.spentCents || 0) === 0 && (
+        {/* Row 3: Delete button (only when no money spent and no funds) */}
+        {canDelete && (
           <button
-            className={`px-3 py-1.5 rounded-xl border ${
-              ev.fundedCents > 0 ? "border-slate-300 text-slate-400 cursor-not-allowed" : "border-red-300 text-red-600"
-            }`}
-            onClick={() => (ev.fundedCents > 0 ? null : onDelete(ev))}
-            disabled={ev.fundedCents > 0}
-            title={ev.fundedCents > 0 ? "Remove funds first to delete" : "Delete"}
+            className="col-span-2 flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border border-red-300 text-red-600 hover:bg-red-50 text-sm mt-1"
+            onClick={() => onDelete(ev)}
           >
+            <Trash2 className="w-4 h-4" />
             Delete
           </button>
         )}
@@ -1229,7 +1808,8 @@ export default function EventsPage() {
     const to = filters.to ? new Date(filters.to) : null;
 
     return scopedByMonth.filter((e) => {
-      const okQ = !q || [e.title, e.notes].some((s) => (s || "").toLowerCase().includes(q));
+      // Updated search logic: only show titles starting with the search letter
+      const okQ = !q || (e.title || "").toLowerCase().startsWith(q);
       const okMode = !filters.mode || e.mode === filters.mode;
       const okAcc = !filters.accountId || e.primaryAccountId === filters.accountId;
 
@@ -1253,14 +1833,14 @@ export default function EventsPage() {
   }, [scopedByMonth, filters]);
 
   return (
-    <div className="min-h-screen bg-slate-50 py-8">
+    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
       <div className="mx-auto max-w-6xl px-4">
         {/* Header with Month Scope */}
         <header className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Events</h1>
-            <p className="text-slate-500 text-sm">
-              Scoped to <b>{viewPeriod}</b> by <b>Created Month</b>. Events created in other months won’t count here.
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">Events</h1>
+            <p className="text-slate-600 mt-1">
+              Create Upcomming Events And Get Ready Without Financial Fear.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1276,7 +1856,8 @@ export default function EventsPage() {
                 This Month
               </button>
             </div>
-            <button className="px-3 py-2 rounded-xl border" onClick={load}>
+            <button className="flex items-center gap-2 px-3 py-2.5 rounded-xl border hover:bg-slate-50 text-blue-600 hover:text-blue-700" onClick={load}>
+              <RefreshCw className="w-4 h-4" />
               Refresh
             </button>
             <button
@@ -1288,18 +1869,20 @@ export default function EventsPage() {
                   logoUrl: "/reportLogo.png",
                 })
               }
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50 shadow-sm"
+              className="flex items-center gap-2 rounded-xl border border-blue-400 bg-white px-4 py-2.5 text-sm hover:bg-blue-50 text-blue-600 hover:text-blue-700 shadow-sm"
             >
+              <FileText className="w-4 h-4" />
               Generate Report
             </button>
             <button
-              className="px-4 py-2 rounded-xl bg-indigo-600 text-white"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700"
               onClick={() => {
                 setEditing(null);
                 setOpen(true);
               }}
             >
-              + Create Event
+              <Plus className="w-4 h-4" />
+              Create Event
             </button>
           </div>
         </header>
@@ -1417,10 +2000,10 @@ export default function EventsPage() {
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-red-700 text-sm">{err}</div>
         )}
 
-        {/* Cards */}
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Cards - 2 per row */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           {filtered.length === 0 ? (
-            <div className="text-slate-500">
+            <div className="col-span-2 text-slate-500 text-center py-8">
               No events in {viewPeriod}. Click <b>Create Event</b> to get started.
             </div>
           ) : (
@@ -1441,87 +2024,134 @@ export default function EventsPage() {
           )}
         </div>
 
-        {/* Table */}
-        <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr>
-                <th className="px-3 py-2 text-left">Title</th>
-                <th className="px-3 py-2 text-left">Mode</th>
-                <th className="px-3 py-2 text-left">Account</th>
-                <th className="px-3 py-2 text-right">Target</th>
-                <th className="px-3 py-2 text-right">Funded</th>
-                <th className="px-3 py-2 text-right">Spent</th>
-                <th className="px-3 py-2 text-left">Created</th>
-                <th className="px-3 py-2 text-left">Due</th>
-                <th className="px-3 py-2 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 ? (
+        {/* Table - Made horizontally scrollable */}
+        <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-full">
+              <thead className="bg-slate-200 text-slate-900">
                 <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-slate-500">
-                    No events
-                  </td>
+                  <th className="px-3 py-2 text-left">Title</th>
+                  <th className="px-3 py-2 text-left">Mode</th>
+                  <th className="px-3 py-2 text-left">Account</th>
+                  <th className="px-3 py-2 text-right">Target</th>
+                  <th className="px-3 py-2 text-right">Funded</th>
+                  <th className="px-3 py-2 text-right">Spent</th>
+                  <th className="px-3 py-2 text-left">Due</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
                 </tr>
-              ) : (
-                filtered.map((e) => {
-                  const hasSpend = (e.spentCents || 0) > 0;
-                  const refundable = Math.max(0, (e.fundedCents || 0) - (e.spentCents || 0)) > 0;
-                  const canDelete = !hasSpend && (e.fundedCents || 0) === 0;
-                  return (
-                    <tr key={e._id} className="border-t">
-                      <td className="px-3 py-2">{e.title}</td>
-                      <td className="px-3 py-2">{e.mode}</td>
-                      <td className="px-3 py-2">{accounts.find((a) => a._id === e.primaryAccountId)?.name || "—"}</td>
-                      <td className="px-3 py-2 text-right">
-                        {currency(e.targetCents, e.currency || "LKR")}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        {currency(e.fundedCents, e.currency || "LKR")}
-                      </td>
-                      <td className="px-3 py-2 text-right">{currency(e.spentCents, e.currency || "LKR")}</td>
-                      <td className="px-3 py-2">
-                        {e?.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—"}
-                      </td>
-                      <td className="px-3 py-2">
-                        {e?.dates?.due ? new Date(e.dates.due).toLocaleDateString() : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right space-x-3">
-                        <button
-                          className="text-blue-600 hover:underline"
-                          onClick={() => {
-                            setEditing(e);
-                            setOpen(true);
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button className="text-emerald-600 hover:underline" onClick={() => setFunding(e)}>
-                          Fund
-                        </button>
-                        {refundable && (
-                          <button className="text-amber-600 hover:underline" onClick={() => setDefunding(e)}>
-                            Remove Funds
-                          </button>
-                        )}
-                        {!hasSpend && (
-                          <button
-                            className={canDelete ? "text-red-600 hover:underline" : "text-slate-400 cursor-not-allowed"}
-                            onClick={() => (canDelete ? onDeleteEvent(e) : null)}
-                            disabled={!canDelete}
-                            title={canDelete ? "Delete" : e.fundedCents > 0 ? "Remove funds first to delete" : ""}
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+              </thead>
+
+              <tbody>
+                {filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-6 text-center text-slate-500 italic">
+                      No events
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map((e) => {
+                    const hasSpend = (e.spentCents || 0) > 0;
+                    const refundable = Math.max(0, (e.fundedCents || 0) - (e.spentCents || 0)) > 0;
+                    const canDelete = !hasSpend && (e.fundedCents || 0) === 0;
+
+                    const accountName = accounts.find((a) => a._id === e.primaryAccountId)?.name || "—";
+                    const modePill =
+                      e.mode === "single"
+                        ? "bg-slate-100 text-slate-700"
+                        : "bg-indigo-50 text-indigo-700";
+
+                    return (
+                      <tr
+                        key={e._id}
+                        className="border-t hover:bg-slate-50 transition-colors"
+                      >
+                        <td className="px-3 py-2 font-medium text-slate-800">{e.title}</td>
+
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs ${modePill}`}>
+                            {e.mode === "single" ? "Single" : "Itemized"}
+                          </span>
+                        </td>
+
+                        <td className="px-3 py-2">{accountName}</td>
+
+                        <td className="px-3 py-2 text-right font-semibold">
+                          {currency(e.targetCents, e.currency || "LKR")}
+                        </td>
+
+                        <td className="px-3 py-2 text-right">
+                          {currency(e.fundedCents, e.currency || "LKR")}
+                        </td>
+
+                        <td className="px-3 py-2 text-right">
+                          {currency(e.spentCents, e.currency || "LKR")}
+                        </td>
+
+                        <td className="px-3 py-2">
+                          {e?.dates?.due ? (
+                            <span className="inline-flex items-center gap-1">
+                              <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+                              {new Date(e.dates.due).toLocaleDateString()}
+                            </span>
+                          ) : "—"}
+                        </td>
+
+                        <td className="px-3 py-2">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-800"
+                              onClick={() => { setEditing(e); setOpen(true); }}
+                              title="Edit"
+                            >
+                              <Pencil className="w-4 h-4" />
+                              <span className="hidden sm:inline">Edit</span>
+                            </button>
+
+                            <button
+                              className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-800"
+                              onClick={() => setFunding(e)}
+                              title="Fund"
+                            >
+                              <PlusCircle className="w-4 h-4" />
+                              <span className="hidden sm:inline">Fund</span>
+                            </button>
+
+                            {refundable && (
+                              <button
+                                className="inline-flex items-center gap-1.5 text-red-600 hover:text-red-800"
+                                onClick={() => setDefunding(e)}
+                                title="Remove funds"
+                              >
+                                <MinusCircle className="w-4 h-4" />
+                                <span className="hidden sm:inline">Remove</span>
+                              </button>
+                            )}
+
+                            {!hasSpend && (
+                              <button
+                                className={[
+                                  "inline-flex items-center gap-1.5",
+                                  canDelete
+                                    ? "text-red-600 hover:text-red-800"
+                                    : "text-slate-400 cursor-not-allowed",
+                                ].join(" ")}
+                                onClick={() => (canDelete ? onDeleteEvent(e) : null)}
+                                disabled={!canDelete}
+                                title={canDelete ? "Delete" : e.fundedCents > 0 ? "Remove funds first to delete" : ""}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                                <span className="hidden sm:inline">Delete</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Modals */}
@@ -1563,5 +2193,5 @@ export default function EventsPage() {
         />
       </div>
     </div>
-  );
+  ); 
 }

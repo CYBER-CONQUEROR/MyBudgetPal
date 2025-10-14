@@ -1,5 +1,5 @@
 // src/pages/BudgetPlanPage.jsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { thisMonth, nextMonthOfToday, monthLabel, addMonths, money } from "../budget/utils";
 import { C } from "../budget/compute";
 import { deletePlanApi, getPlan } from "../budget/api";
@@ -19,104 +19,354 @@ import DangerZone from "../components/budget/DangerZone";
 // NEW
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import api from "../api/api.js";
 
-/* ---------------- Helpers ---------------- */
-function makeReportFilename(prefix, ts = new Date()) {
-  return `${prefix}_${ts.toISOString().replace(/[:T]/g, "-").slice(0, 15)}.pdf`;
+// Icons for buttons
+import { FileText, PencilLine, PlusCircle } from "lucide-react";
+
+/* ==========================================================================================
+   FLEXIBLE RAW-DATA AGGREGATION (no special /actuals endpoints required)
+   ========================================================================================== */
+
+/** Try to parse a JS date (ms) from various common fields */
+function tsOf(x) {
+  const v =
+    x?.at ??
+    x?.date ??
+    x?.when ??
+    x?.paidAt ??
+    x?.dueDate ??
+    x?.dates?.end ??
+    x?.dates?.due ??
+    x?.dates?.start ??
+    x?.createdAt ??
+    x?.updatedAt;
+  const t = v instanceof Date ? v.getTime() : Date.parse(v);
+  return Number.isFinite(t) ? t : NaN;
 }
 
-/**
- * Build a map of { categoryId: actualRupees } using (in order of preference):
- * 1) actuals.dtdBreakdown (already aggregated)
- * 2) dtdExpenses array for current period (sum by category)
- */
-function buildDtdActualMap(actuals, dtdExpenses) {
-  // 1) If hook already exposes breakdown, prefer that
-  if (actuals && actuals.dtdBreakdown && typeof actuals.dtdBreakdown === "object") {
-    return actuals.dtdBreakdown; // assumed Rupees already
+/** Get rupees from object that may store amount in cents or rupees */
+function rupeesOf(x) {
+  if (x == null) return 0;
+  if (x.spentCents != null) return Number(x.spentCents || 0) / 100;
+  if (x.amountCents != null) return Number(x.amountCents || 0) / 100;
+  if (x.amount != null) return Number(x.amount || 0);
+  if (x.value != null) return Number(x.value || 0);
+  return 0;
+}
+
+/** In-range check for timestamps (millis) */
+function withinMs(ms, startMs, endMs) {
+  return Number.isFinite(ms) && ms >= startMs && ms <= endMs;
+}
+
+/** Month start/end helpers (UTC to avoid TZ bleed) */
+function monthBounds(period /* 'YYYY-MM' */) {
+  const [y, m] = period.split("-").map(Number);
+  const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+  return { start, end };
+}
+
+/** Safely read a Category id string from different shapes */
+function categoryIdOf(e) {
+  const v = e?.categoryId ?? e?.category ?? e?.category_id;
+  if (!v) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") return String(v._id ?? v.id ?? "");
+  return "";
+}
+
+/** Sum DTD expenses (and per-category breakdown) from a raw list */
+function aggregateDtdActual(expenses, start, end) {
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  let total = 0;
+  const byCat = {};
+  for (const e of Array.isArray(expenses) ? expenses : []) {
+    const ms = tsOf(e);
+    if (!withinMs(ms, startMs, endMs)) continue;
+    const amt = rupeesOf(e);
+    total += amt;
+    const cid = categoryIdOf(e);
+    if (cid) byCat[cid] = (byCat[cid] || 0) + amt;
   }
+  return { total, byCat };
+}
 
-  // 2) Fallback: aggregate from dtdExpenses
-  const map = {};
-  for (const e of Array.isArray(dtdExpenses) ? dtdExpenses : []) {
-    // Try to read a category id
-    const cat =
-      (e?.categoryId && (e.categoryId._id || e.categoryId)) ||
-      e?.category ||
-      e?.category_id ||
-      "";
-    if (!cat) continue;
-    const id = String(cat);
-
-    // Amount could be rupees or cents; support both
-    const amtR =
-      e?.amount != null
-        ? Number(e.amount)
-        : Number(e?.amountCents || 0) / 100;
-
-    map[id] = (map[id] || 0) + (Number.isFinite(amtR) ? amtR : 0);
+/** Sum bank commitments paid in month (paidAt preferred, else dueDate) */
+function aggregateCommitmentsActual(commitments, start, end) {
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  let total = 0;
+  for (const c of Array.isArray(commitments) ? commitments : []) {
+    const ms = tsOf({ ...c, at: c?.paidAt ?? c?.dueDate });
+    if (!withinMs(ms, startMs, endMs)) continue;
+    total += rupeesOf(c);
   }
-  return map;
+  return total;
+}
+
+/** Sum events actuals in month */
+function aggregateEventsActual(events, start, end) {
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  let total = 0;
+  for (const ev of Array.isArray(events) ? events : []) {
+    const ms = tsOf(ev);
+    if (!withinMs(ms, startMs, endMs)) continue;
+    total += rupeesOf(ev);
+  }
+  return total;
+}
+
+/** Net savings contributions across all goals' ledgers in month (fund - withdraw) */
+function aggregateSavingsActual(goals, start, end) {
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  let net = 0;
+  for (const g of Array.isArray(goals) ? goals : []) {
+    for (const e of Array.isArray(g?.ledger) ? g.ledger : []) {
+      const ms = tsOf(e);
+      if (!withinMs(ms, startMs, endMs)) continue;
+      const amt = rupeesOf(e); // ledger uses amountCents
+      if (e?.kind === "fund") net += amt;
+      else if (e?.kind === "withdraw") net -= amt;
+    }
+  }
+  return net;
+}
+
+/* ======================= CONFIG: tweak if your backend paths differ ======================= */
+const listEndpoints = {
+  expenses: "expenses",      // DTD expenses
+  events: "events",          // Events spending
+  commitments: "commitments",// BankCommitment occurrences
+  savingsGoals: "savings-goals", // include ledgers
+};
+
+// Helper: extract array from common list response shapes
+function extractArray(resp) {
+  const d = resp?.data;
+  if (Array.isArray(d)) return d;
+  if (Array.isArray(d?.data)) return d.data;
+  if (Array.isArray(d?.items)) return d.items;
+  if (Array.isArray(d?.results)) return d.results;
+  if (d && typeof d === "object") {
+    for (const v of Object.values(d)) if (Array.isArray(v)) return v;
+  }
+  return [];
+}
+
+async function fetchList(path, params) {
+  try {
+    const r = await api.get(path, params ? { params } : undefined);
+    return extractArray(r);
+  } catch (e1) {
+    try {
+      const r2 = await api.get(path);
+      return extractArray(r2);
+    } catch (e2) {
+      console.error("fetchList failed", path, params, e2?.response?.status, e2?.message);
+      return [];
+    }
+  }
+}
+
+/** For range export: pull raw lists and compute Actuals for one period */
+async function computeActualsForPeriod(period) {
+  const { start, end } = monthBounds(period);
+  const params = {
+    start: start.toISOString(),
+    end: end.toISOString(),
+    includeArchived: "false",
+  };
+
+  // fetch in parallel
+  const [expenses, events, commitments, savingsGoals] = await Promise.all([
+    fetchList(listEndpoints.expenses, params),
+    fetchList(listEndpoints.events, params),
+    fetchList(listEndpoints.commitments, params),
+    fetchList(listEndpoints.savingsGoals, { ...params, includeLedger: "true" }),
+  ]);
+
+  const dtdAgg = aggregateDtdActual(expenses, start, end);
+  const eventsTotal = aggregateEventsActual(events, start, end);
+  const commitmentsTotal = aggregateCommitmentsActual(commitments, start, end);
+  const savingsNet = aggregateSavingsActual(savingsGoals, start, end);
+
+  const actuals = {
+    savings: savingsNet,
+    commitments: commitmentsTotal,
+    events: eventsTotal,
+    dtd: dtdAgg.total,
+  };
+  const dtdActuals = dtdAgg.byCat;
+
+  return { actuals, dtdActuals };
+}
+
+/* ---------------- PDF helpers ---------------- */
+function makeReportFilename(prefix, ts = new Date()) {
+  return `${prefix}_${ts.toISOString().replace(/[:T]/g, "-").slice(0, 15)}.pdf`;
 }
 
 /**
  * PDF generator — expects each plan item as:
  *   { period: 'YYYY-MM', plan, actuals, dtdActuals: {catId: rupees} }
  */
-async function generateBudgetPDF({ plans, rangeLabel, logoUrl = "/reportLogo.png" }) {
-  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
-  const margin = 40;
-  const pageH = doc.internal.pageSize.getHeight();
+// ---- Logo URL (pick one that fits your app) ----
+const PUBLIC_LOGO_URL =
+  process.env.REACT_APP_PUBLIC_LOGO_URL ||      // CRA style
+  import.meta?.env?.VITE_PUBLIC_LOGO_URL ||     // Vite style
+  "/reportLogo.png";                            // fallback
 
-  // === HEADER WITH LOGO ===
-  let textX = margin;
+// ---- Helper: load image as data URL for jsPDF ----
+export async function loadImageDataURL(url) {
   try {
-    const img = new Image();
-    img.crossOrigin = "Anonymous";
-    img.src = logoUrl;
-    await new Promise((resolve, reject) => {
-      img.onload = () => {
-        doc.addImage(img, "PNG", margin, margin - 4, 44, 44);
-        textX = margin + 56;
-        resolve();
-      };
-      img.onerror = reject;
+    const res = await fetch(url, { cache: "no-store", mode: "cors" });
+    if (!res.ok) throw new Error(`Failed to fetch logo: ${res.status}`);
+    const blob = await res.blob();
+    const dataUrl = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
     });
+    return dataUrl;
   } catch (e) {
-    // If logo fails, we just continue without it
-    console.warn("Logo not loaded", e);
+    console.warn("Logo load failed; continuing without logo:", e);
+    return null;
   }
+}
 
-  doc.setFont("helvetica", "bold").setFontSize(20).text("My Budget Pal", textX, margin + 12);
-  doc.setFont("helvetica", "normal").setFontSize(16).text("Budget Plans Report", textX, margin + 36);
+async function generateBudgetPDF({
+  plans,
+  rangeLabel,
+  logoUrl = PUBLIC_LOGO_URL, // keep same source used by Commitments
+}) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
 
-  let y = margin + 70;
-  doc.setFontSize(11).text(`Range: ${rangeLabel}`, margin, y);
-  y += 20;
+  // ===== layout & palette (same as Commitments) =====
+  const margin = 40;
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const brand = { r: 79, g: 70, b: 229 };        // indigo-600
+  const brandLight = { r: 241, g: 245, b: 255 }; // indigo-50
+  const slateTxt = 40;
+  const TOTAL_PAGES_TOKEN = "{total_pages_count_string}";
 
+  // helpers
+  const humanDateTime = new Date().toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+  const drawFooter = () => {
+    doc.setDrawColor(235).setLineWidth(1);
+    doc.line(margin, pageH - 40, pageW - margin, pageH - 40);
+    doc.setFontSize(9).setTextColor(120);
+    doc.text(`Generated: ${humanDateTime}`, margin, pageH - 22);
+    const pageStr = `Page ${doc.internal.getNumberOfPages()} of ${TOTAL_PAGES_TOKEN}`;
+    const pageX = pageW - margin - 120; // match Commitments inset
+    doc.text(pageStr, pageX, pageH - 22, { align: "right" });
+    doc.setTextColor(slateTxt);
+  };
+
+  // ===== header (logo + brand title + indigo separator) =====
+  const logoSize = 46;
+  const headerY = margin;
+  try {
+    const dataUrl = await loadImageDataURL(logoUrl);
+    if (dataUrl) doc.addImage(dataUrl, "PNG", margin, headerY, logoSize, logoSize);
+  } catch {}
+  const headerTextX = margin + logoSize + 12;
+  doc.setFont("helvetica", "bold").setFontSize(22).setTextColor(slateTxt);
+  doc.text("My Budget Pal", headerTextX, headerY + 30);
+
+  const sepY = headerY + logoSize + 12;
+  doc.setDrawColor(brand.r, brand.g, brand.b).setLineWidth(2);
+  doc.line(margin, sepY, pageW - margin, sepY);
+
+  // Title (centered)
+  const titleY = sepY + 28;
+  doc.setFont("helvetica", "bold").setFontSize(20).setTextColor(slateTxt);
+  doc.text("Budget Plans Report", pageW / 2, titleY, { align: "center" });
+
+  // ===== soft filter panel (same style) =====
+  const boxX = margin;
+  const boxY = titleY + 20;
+  const filterLines = [`Range : ${rangeLabel || "—"}`];
+  const lineH = 14;
+  const boxH = filterLines.length * lineH + 16;
+  const boxW = pageW - margin * 2;
+
+  doc.setDrawColor(230).setFillColor(brandLight.r, brandLight.g, brandLight.b);
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6, 6, "F");
+
+  doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(100);
+  let fy = boxY + 12;
+  filterLines.forEach((line) => { doc.text(line, boxX + 10, fy + 10); fy += lineH; });
+  doc.setTextColor(slateTxt);
+
+  // watermark (same)
   doc.setFontSize(10).setTextColor(120);
   doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
-  doc.setTextColor(0);
-  
+  doc.setTextColor(slateTxt);
+
+  // ===== tables =====
+  let y = boxY + boxH + 22;
   let grandBudgeted = 0;
   let grandActual = 0;
 
-  for (const { period, plan, actuals, dtdActuals } of plans) {
-    doc.setFont("helvetica", "bold").setFontSize(13).text(`Period: ${period}`, margin, y);
+  const tableCommon = {
+    theme: "grid",
+    margin: { left: margin, right: margin },
+    styles: {
+      fontSize: 9,
+      cellPadding: 4,
+      lineColor: [230, 230, 230],
+      lineWidth: 0.5,
+      textColor: [40, 40, 40],
+      valign: "middle",
+    },
+    headStyles: {
+      fillColor: [brand.r, brand.g, brand.b], // indigo header like Commitments
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      halign: "left",
+    },
+    alternateRowStyles: { fillColor: [247, 248, 250] },
+    didDrawPage: () => drawFooter(),
+  };
+
+  for (const { period, plan, actuals, dtdActuals } of (plans || [])) {
+    // New page if tight
+    if (y > pageH - 160) {
+      doc.addPage();
+      drawFooter();
+      // re-watermark
+      doc.setFontSize(10).setTextColor(120);
+      doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+      doc.setTextColor(slateTxt);
+      y = margin;
+    }
+
+    doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(slateTxt);
+    doc.text(`Period: ${period}`, margin, y);
     y += 16;
 
     if (!plan) {
-      doc.setFont("helvetica", "italic").text("No plan for this month.", margin, y);
+      doc.setFont("helvetica", "italic").setFontSize(11).setTextColor(80);
+      doc.text("No plan for this month.", margin, y);
       y += 24;
       continue;
     }
 
-    // ==== HIGH-LEVEL MODULES WITH ACTUALS ====
-    const rows = [
-      ["Savings",       money(plan?.savings?.amount      || 0), money(actuals?.savings      || 0)],
-      ["Commitments",   money(plan?.commitments?.amount  || 0), money(actuals?.commitments  || 0)],
-      ["Events",        money(plan?.events?.amount       || 0), money(actuals?.events       || 0)],
-      ["DTD Total",     money(plan?.dtd?.amount          || 0), money(actuals?.dtd          || 0)],
+    // High-level Budget vs Actual
+    const rowsA = [
+      ["Savings",      money(plan?.savings?.amount || 0),      money(actuals?.savings || 0)],
+      ["Commitments",  money(plan?.commitments?.amount || 0),  money(actuals?.commitments || 0)],
+      ["Events",       money(plan?.events?.amount || 0),       money(actuals?.events || 0)],
+      ["DTD Total",    money(plan?.dtd?.amount || 0),          money(actuals?.dtd || 0)],
     ];
 
     const totalBudgeted =
@@ -132,20 +382,18 @@ async function generateBudgetPDF({ plans, rangeLabel, logoUrl = "/reportLogo.png
       (actuals?.dtd || 0);
 
     grandBudgeted += totalBudgeted;
-    grandActual += totalActual;
+    grandActual   += totalActual;
 
     autoTable(doc, {
+      ...tableCommon,
       startY: y,
       head: [["Category", "Budgeted", "Actual"]],
-      body: rows,
-      theme: "grid",
-      styles: { fontSize: 9, cellPadding: 3 },
-      headStyles: { fillColor: [242, 246, 252], textColor: 40 },
-      margin: { left: margin, right: margin },
+      body: rowsA,
+      columnStyles: { 1: { halign: "right" }, 2: { halign: "right" } },
     });
-    y = doc.lastAutoTable.finalY + 14;
+    y = (doc.lastAutoTable?.finalY || y) + 14;
 
-    // ==== DTD SUB-BUDGETS WITH ACTUALS (category-level) ====
+    // DTD sub-budgets
     if (plan?.dtd?.subBudgets?.length) {
       const dtdRows = plan.dtd.subBudgets.map((sb) => {
         const catId = String(sb?.categoryId?._id ?? sb?.categoryId ?? "");
@@ -156,38 +404,81 @@ async function generateBudgetPDF({ plans, rangeLabel, logoUrl = "/reportLogo.png
       });
 
       autoTable(doc, {
+        ...tableCommon,
         startY: y,
         head: [["DTD Category", "Budgeted", "Actual"]],
         body: dtdRows,
-        theme: "grid",
-        styles: { fontSize: 9, cellPadding: 3 },
-        headStyles: { fillColor: [242, 246, 252], textColor: 40 },
-        margin: { left: margin, right: margin },
+        columnStyles: { 1: { halign: "right" }, 2: { halign: "right" } },
       });
-      y = doc.lastAutoTable.finalY + 20;
+      y = (doc.lastAutoTable?.finalY || y) + 20;
     }
 
     // Period totals
-    doc.setFont("helvetica", "bold").setFontSize(11);
+    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(slateTxt);
     doc.text(`Total Budgeted: ${money(totalBudgeted)}`, margin, y);
     y += 14;
-    doc.text(`Total Actual: ${money(totalActual)}`, margin, y);
+    doc.text(`Total Actual:   ${money(totalActual)}`, margin, y);
     y += 24;
   }
 
-  // ==== GRAND TOTALS ====
-  doc.setFont("helvetica", "bold").setFontSize(13);
-  doc.text(`Grand Total Budgeted: ${money(grandBudgeted)}`, margin, y);
-  y += 16;
-  doc.text(`Grand Total Actual: ${money(grandActual)}`, margin, y);
+  // ===== Summary (same look/feel as Commitments) =====
+  if (y > pageH - 120) {
+    doc.addPage();
+    drawFooter();
+    // re-watermark
+    doc.setFontSize(10).setTextColor(120);
+    doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, { angle: 90 });
+    doc.setTextColor(slateTxt);
+    y = margin + 10;
+  }
 
-  // ==== SIGNATURE ====
-  doc.setFont("helvetica", "normal").setFontSize(12);
-  doc.text("Signature : ...........................................", margin, pageH - 60);
+  doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(slateTxt);
+  doc.text("Summary", margin, y);
+  y += 10;
+  doc.setDrawColor(brand.r, brand.g, brand.b).setLineWidth(1);
+  doc.line(margin, y, pageW - margin, y);
+  y += 14;
 
+  // aligned label : value (tight)
+  doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(60);
+  const rowsSum = [
+    ["Grand Total Budgeted", money(grandBudgeted)],
+    ["Grand Total Actual",   money(grandActual)],
+  ];
+  const labelX = margin + 10;
+  const labelWidths = rowsSum.map(([lbl]) => doc.getTextWidth(lbl));
+  const maxLabelW = Math.max(...labelWidths);
+  const colonX = labelX + maxLabelW + 6;
+  const valueAnchor = Math.min(pageW - margin - 40, colonX + 10 + 220);
+  const lineGap = 18;
+
+  rowsSum.forEach(([label, value]) => {
+    doc.text(label, labelX, y);
+    doc.text(":", colonX, y);
+    doc.text(value, valueAnchor, y, { align: "right" });
+    y += lineGap;
+  });
+
+  doc.setDrawColor(230).setLineWidth(1);
+  doc.line(margin, y, pageW - margin, y);
+  y += 24;
+
+  // ===== signature (bottom aligned) =====
+  let sigY = pageH - 68;
+  if (sigY - y < 40) {
+    doc.addPage();
+    drawFooter();
+    sigY = pageH - 68;
+  }
+  doc.setFont("helvetica", "normal").setFontSize(12).setTextColor(slateTxt);
+  doc.text("Authorized Signature : ____________________________________", margin, sigY);
+
+  // finalize X of Y and save
+  if (typeof doc.putTotalPages === "function") doc.putTotalPages(TOTAL_PAGES_TOKEN);
   const fn = makeReportFilename("BudgetReport");
   doc.save(fn);
 }
+
 
 /* ---------------- Component ---------------- */
 export default function BudgetPlanPage() {
@@ -204,6 +495,9 @@ export default function BudgetPlanPage() {
   const [showEditWhole, setShowEditWhole] = useState(false);
   const [showEditOne, setShowEditOne] = useState(null);
   const [showEditDtdOne, setShowEditDtdOne] = useState(null);
+
+  // === availability of months with plans (plus allow exactly one month ahead)
+  const [availablePeriods, setAvailablePeriods] = useState([]);
 
   const budgets = useMemo(
     () => ({
@@ -232,19 +526,73 @@ export default function BudgetPlanPage() {
   const showForecastCard = !plan && isNextOfToday;
   const showCreateButton = !plan && canCreateForThisPeriod;
 
+  // Build a window of months to check (12 months back up to next month)
+  const buildWindow = () => {
+    const arr = [];
+    let cur = addMonths(thisMonth(), -12);
+    const limit = nextMonthOfToday();
+    while (cur <= limit) {
+      arr.push(cur);
+      cur = addMonths(cur, +1);
+    }
+    return arr;
+  };
+
+  // Prefetch which months have plans (run once)
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const windowMonths = buildWindow();
+      const hits = await Promise.all(
+        windowMonths.map((m) => getPlan(m).then((p) => (p ? m : null)).catch(() => null))
+      );
+      if (alive) setAvailablePeriods(hits.filter(Boolean));
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Refresh the availability list after mutations
+  const refreshAvailable = async () => {
+    const windowMonths = buildWindow();
+    const hits = await Promise.all(
+      windowMonths.map((m) => getPlan(m).then((p) => (p ? m : null)).catch(() => null))
+    );
+    setAvailablePeriods(hits.filter(Boolean));
+  };
+
   const goPrev = () => setPeriod((p) => addMonths(p, -1));
-  const goNext = () => setPeriod((p) => addMonths(p, +1));
+  const goNext = () => setPeriod((p) => {
+    const next = addMonths(p, +1);
+    return next <= nextMonthOfToday() ? next : p;
+  });
+
   const onChangeBlocked = async (newPeriod) => {
     if (newPeriod === period) return;
-    const p = await getPlan(newPeriod);
-    if (p) setPeriod(newPeriod);
-    else window.alert("No budget plan for that month.");
+    const nextAllowed = nextMonthOfToday();
+    if (newPeriod === nextAllowed) {
+      setPeriod(newPeriod);
+      return;
+    }
+    const p = await getPlan(newPeriod).catch(() => null);
+    if (p) {
+      setPeriod(newPeriod);
+      if (!availablePeriods.includes(newPeriod)) {
+        setAvailablePeriods((prev) => [...prev, newPeriod]);
+      }
+    } else {
+      window.alert("No budget plan for that month.");
+    }
   };
+
   const deletePlan = async () => {
     if (!plan) return;
     if (!window.confirm("Delete this month's budget plan? This cannot be undone.")) return;
     await deletePlanApi(period);
-    refetch();
+    await refetch();
+    await refreshAvailable();
   };
 
   /* --------- Report state --------- */
@@ -252,109 +600,150 @@ export default function BudgetPlanPage() {
   const [endMonth, setEndMonth] = useState(thisMonth());
   const [loadingReport, setLoadingReport] = useState(false);
 
-  // Build current month DTD actuals map for the PDF (fixes missing category actuals)
-  const dtdActualsMap = useMemo(
-    () => buildDtdActualMap(actuals, dtdExpenses),
-    [actuals, dtdExpenses]
-  );
+  // Build current month DTD actuals map for the single-month PDF (still uses hook data)
+  const dtdActualsMap = useMemo(() => {
+    const hasBreakdown = actuals && actuals.dtdBreakdown && typeof actuals.dtdBreakdown === "object";
+    if (hasBreakdown) return actuals.dtdBreakdown;
+    const { byCat } = aggregateDtdActual(
+      dtdExpenses || [],
+      monthBounds(period).start,
+      monthBounds(period).end
+    );
+    return byCat;
+  }, [actuals, dtdExpenses, period]);
 
   const generateSingle = async () => {
     setLoadingReport(true);
-    const p = await getPlan(period).catch(() => null);
-    await generateBudgetPDF({
-      plans: [{ period, plan: p, actuals, dtdActuals: dtdActualsMap }],
-      rangeLabel: monthLabel(period),
-    });
-    setLoadingReport(false);
+    try {
+      const p = await getPlan(period).catch(() => null);
+      let moduleActuals = actuals;
+      if (
+        !moduleActuals ||
+        (moduleActuals &&
+          [moduleActuals.savings, moduleActuals.commitments, moduleActuals.events, moduleActuals.dtd].every(
+            (v) => v == null
+          ))
+      ) {
+        const { actuals: computed } = await computeActualsForPeriod(period);
+        moduleActuals = computed;
+      }
+      await generateBudgetPDF({
+        plans: [{ period, plan: p, actuals: moduleActuals, dtdActuals: dtdActualsMap }],
+        rangeLabel: monthLabel(period),
+      });
+    } finally {
+      setLoadingReport(false);
+    }
   };
 
   const generateRange = async () => {
     setLoadingReport(true);
-    const plans = [];
-    let cur = startMonth;
-    while (cur <= endMonth) {
-      const p = await getPlan(cur).catch(() => null);
-      // ⚠️ TODO: fetch actuals + dtdExpenses for each month if you need true range actuals
-      plans.push({ period: cur, plan: p, actuals: {}, dtdActuals: {} });
-      cur = addMonths(cur, +1);
+    try {
+      const plans = [];
+      let cur = startMonth;
+      while (cur <= endMonth) {
+        const p = await getPlan(cur).catch(() => null);
+        const { actuals: a, dtdActuals } = await computeActualsForPeriod(cur);
+        plans.push({ period: cur, plan: p, actuals: a, dtdActuals });
+        cur = addMonths(cur, +1);
+      }
+      await generateBudgetPDF({
+        plans,
+        rangeLabel: `${monthLabel(startMonth)} → ${monthLabel(endMonth)}`,
+      });
+    } finally {
+      setLoadingReport(false);
     }
-    await generateBudgetPDF({
-      plans,
-      rangeLabel: `${monthLabel(startMonth)} → ${monthLabel(endMonth)}`,
-    });
-    setLoadingReport(false);
   };
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-[#F4F7FE] to-[#E8ECF7]">
+    <div className="min-h-screen w-full bg-gradient-to-b from-white to-slate-50">
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
         {loading ? (
           <div className="animate-pulse h-48 rounded-2xl bg-slate-100" />
         ) : error ? (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 text-rose-700 p-6">{error}</div>
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 text-rose-700 p-6">
+            {error}
+          </div>
         ) : (
           <>
-            {/* Header/actions */}
+            {/* Header & actions */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
-                <h1 className="text-3xl font-extrabold text-slate-800">Budget Management</h1>
-                <p className="text-sm text-slate-500">
+                <h1 className="pb-1 text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-700 via-indigo-600 to-purple-600">
+                  Budget Management
+                </h1>
+                <p className="text-sm text-slate-600">
                   Manage your monthly budget and track your spending with ease.
                 </p>
               </div>
+
               <div className="flex items-center gap-2">
+                {/* Generate Report */}
                 <button
                   onClick={generateSingle}
-                  className="px-3 py-2 rounded-xl border bg-white"
+                  className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold shadow-sm hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-60 inline-flex items-center gap-2"
                   disabled={loadingReport}
+                  title="Generate PDF for current month"
                 >
-                  Generate Report
+                  <FileText size={18} className="shrink-0" />
+                  <span>Generate Report</span>
                 </button>
+
+                {/* Edit Budget Plan */}
                 <button
-                  className={`btn btn-ghost ${plan ? "" : "opacity-40 cursor-not-allowed"}`}
+                  className={`px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-300 inline-flex items-center gap-2 ${
+                    plan ? "" : "opacity-40 cursor-not-allowed"
+                  }`}
                   onClick={() => plan && setShowEditWhole(true)}
                   disabled={!plan}
+                  title="Edit this month's budget plan"
                 >
-                  Edit Budget Plan
+                  <PencilLine size={18} className="shrink-0" />
+                  <span>Edit Budget Plan</span>
                 </button>
+
+                {/* Add Budget */}
                 <button
-                  className={`btn btn-primary ${
+                  className={`px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold shadow-sm hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 inline-flex items-center gap-2 ${
                     plan || !canCreateForThisPeriod ? "opacity-40 cursor-not-allowed" : ""
                   }`}
                   onClick={() => !plan && canCreateForThisPeriod && setShowCreate(true)}
                   disabled={!!plan || !canCreateForThisPeriod}
+                  title={canCreateForThisPeriod ? "Add budget for this month" : "Only current month allowed"}
                 >
-                  Add Budget
+                  <PlusCircle size={18} className="shrink-0" />
+                  <span>Add Budget</span>
                 </button>
               </div>
             </div>
 
             {/* Range Report Section */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="text-lg font-semibold mb-3">Generate Range Report</h2>
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
+              <h2 className="text-lg font-semibold text-slate-900 mb-3">Generate Range Report</h2>
               <div className="flex flex-wrap gap-3 items-end">
                 <div>
-                  <label className="text-sm text-slate-600">Start Month</label>
+                  <label className="text-sm text-slate-600 mr-3">Start Month</label>
                   <input
                     type="month"
                     value={startMonth}
                     onChange={(e) => setStartMonth(e.target.value)}
-                    className="rounded-xl border border-slate-300 px-3 py-2"
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-indigo-200"
                   />
                 </div>
                 <div>
-                  <label className="text-sm text-slate-600">End Month</label>
+                  <label className="text-sm text-slate-600 mr-3">End Month</label>
                   <input
                     type="month"
                     value={endMonth}
                     onChange={(e) => setEndMonth(e.target.value)}
-                    className="rounded-xl border border-slate-300 px-3 py-2"
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-indigo-200"
                   />
                 </div>
                 <button
                   onClick={generateRange}
                   disabled={loadingReport}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 text-white"
+                  className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold shadow-sm hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 disabled:opacity-60"
                 >
                   Generate Range Report
                 </button>
@@ -362,11 +751,20 @@ export default function BudgetPlanPage() {
             </div>
 
             {/* Period strip navigation */}
-            <PeriodStrip period={period} plan={plan} onPrev={goPrev} onNext={goNext} onChangeBlocked={onChangeBlocked} />
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-3">
+              <PeriodStrip
+                period={period}
+                plan={plan}
+                availablePeriods={availablePeriods}
+                onPrev={goPrev}
+                onNext={goNext}
+                onChangeBlocked={onChangeBlocked}
+              />
+            </div>
 
             {/* No plan states */}
-            {!plan && (
-              nextMonthOfToday() === period ? (
+            {!plan &&
+              (nextMonthOfToday() === period ? (
                 <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-6 flex items-center justify-between">
                   <div>
                     <div className="text-indigo-900 font-semibold">
@@ -377,57 +775,88 @@ export default function BudgetPlanPage() {
                     </div>
                   </div>
                   <button
-                    className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:opacity-90"
+                    className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
                     onClick={() => (window.location.href = `/budget/forecast?period=${period}`)}
                   >
                     Get Forecast
                   </button>
                 </div>
               ) : (
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 flex items-center justify-between">
+                <div className="rounded-2xl border border-slate-200 bg-white p-6 flex items-center justify-between shadow-sm">
                   <div>
                     <div className="text-slate-800 font-semibold">No plan for {monthLabel(period)}</div>
                     <div className="text-slate-500 text-sm">
-                      {period === thisMonth() ? "Create a budget plan to get started." : "There is no budget plan for this month."}
+                      {period === thisMonth()
+                        ? "Create a budget plan to get started."
+                        : "There is no budget plan for this month."}
                     </div>
                   </div>
-                  {(!plan && isCurrentPeriod) && (
-                    <button className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:opacity-90" onClick={() => setShowCreate(true)}>
+                  {!plan && isCurrentPeriod && (
+                    <button
+                      className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+                      onClick={() => setShowCreate(true)}
+                    >
                       Create Budget Plan
                     </button>
                   )}
                 </div>
-              )
-            )}
+              ))}
 
             {/* Has plan */}
             {plan && (
               <>
                 <div className="grid grid-cols-12 gap-3">
-                  <SummaryCard label="Savings" value={budgets.savings} color={C.indigo} onEdit={() => setShowEditOne("savings")} />
-                  <SummaryCard label="Commitments" value={budgets.commitments} color={C.green} onEdit={() => setShowEditOne("commitments")} />
-                  <SummaryCard label="Events" value={budgets.events} color={C.teal} onEdit={() => setShowEditOne("events")} />
+                  <SummaryCard
+                    label="Savings"
+                    value={budgets.savings}
+                    color={C.indigo}
+                    onEdit={() => setShowEditOne("savings")}
+                  />
+                  <SummaryCard
+                    label="Commitments"
+                    value={budgets.commitments}
+                    color={C.green}
+                    onEdit={() => setShowEditOne("commitments")}
+                  />
+                  <SummaryCard
+                    label="Events"
+                    value={budgets.events}
+                    color={C.teal}
+                    onEdit={() => setShowEditOne("events")}
+                  />
                   <SummaryCard label="DTD Total" value={budgets.dtdTotal} color={C.amber} disabled />
                 </div>
 
-                <DtdTable
-                  rows={filtered}
-                  total={budgets.dtdTotal}
-                  filter={filter}
-                  setFilter={setFilter}
-                  onEditRow={(r) => setShowEditDtdOne({ categoryId: r.categoryId, name: r.name, alloc: r.alloc })}
-                />
+                <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <DtdTable
+                    rows={filtered}
+                    total={budgets.dtdTotal}
+                    filter={filter}
+                    setFilter={setFilter}
+                    onEditRow={(r) => setShowEditDtdOne({ categoryId: r.categoryId, name: r.name, alloc: r.alloc })}
+                  />
+                </div>
 
                 <div className="grid grid-cols-12 gap-3">
                   <div className="col-span-12 md:col-span-6">
-                    <BudgetPie modules={modules} totalBudgeted={totalBudgeted} unbudgeted={unbudgeted} />
+                    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-3">
+                      <BudgetPie
+                        modules={modules}
+                        totalBudgeted={totalBudgeted}
+                        unbudgeted={unbudgeted}
+                      />
+                    </div>
                   </div>
                   <div className="col-span-12 md:col-span-6">
-                    <CategoryBars data={barData} />
+                    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-3">
+                      <CategoryBars data={barData} />
+                    </div>
                   </div>
                 </div>
 
-                <DangerZone onDelete={deletePlan} />
+                <div className="rounded-2xl border border-rose-200 bg-rose-50/60">
+                  <DangerZone onDelete={deletePlan} />
+                </div>
               </>
             )}
           </>
@@ -439,9 +868,10 @@ export default function BudgetPlanPage() {
         <CreateBudgetModal
           period={period}
           onClose={() => setShowCreate(false)}
-          onCreated={() => {
+          onCreated={async () => {
             setShowCreate(false);
-            refetch();
+            await refetch();
+            await refreshAvailable();
           }}
         />
       )}
@@ -461,9 +891,10 @@ export default function BudgetPlanPage() {
           }}
           income={income}
           onClose={() => setShowEditWhole(false)}
-          onSaved={() => {
+          onSaved={async () => {
             setShowEditWhole(false);
-            refetch();
+            await refetch();
+            await refreshAvailable();
           }}
         />
       )}
@@ -480,9 +911,10 @@ export default function BudgetPlanPage() {
             dtd: Number(plan?.dtd?.amount || 0),
           }}
           onClose={() => setShowEditOne(null)}
-          onSaved={() => {
+          onSaved={async () => {
             setShowEditOne(null);
-            refetch();
+            await refetch();
+            await refreshAvailable();
           }}
         />
       )}
@@ -495,9 +927,10 @@ export default function BudgetPlanPage() {
           plan={plan}
           income={income}
           onClose={() => setShowEditDtdOne(null)}
-          onSaved={() => {
+          onSaved={async () => {
             setShowEditDtdOne(null);
-            refetch();
+            await refetch();
+            await refreshAvailable();
           }}
         />
       )}

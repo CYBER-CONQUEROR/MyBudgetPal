@@ -23,7 +23,7 @@ export default function BudgetPie({ modules, totalBudgeted, unbudgeted }) {
   return (
     <div className="card h-full">
       <div className="card-body">
-        <h3 className="mt-5 text-base font-semibold mb-3">Budget Distribution</h3>
+        <h3 className="text-base font-semibold mb-3">Budget Distribution</h3>
 
         <div className="flex flex-col items-center">
           {/* donut */}

@@ -9,7 +9,7 @@ import {
 
 const NAV_ITEMS = [
   { to: "/", label: "Home", end: true },
-  { to: "/features", label: "Features" },
+  { to: "/#features", label: "Features" },
   { to: "/aboutus", label: "About" },
   { to: "/contactus", label: "Contact" },
 ];
@@ -52,6 +52,61 @@ export default function Header() {
 
   const closeMenu = () => setMenuOpen(false);
 
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const scrollToFeatures = () => {
+    const featuresSection = document.getElementById("features");
+    if (featuresSection) {
+      featuresSection.scrollIntoView({ behavior: "smooth" });
+      return true;
+    }
+    return false;
+  };
+
+  const handleHomeClick = (e) => {
+    e.preventDefault();
+    closeMenu();
+    
+    // Check if we're already on the home page
+    if (window.location.pathname === "/") {
+      // If already on home page, just scroll to top
+      scrollToTop();
+    } else {
+      // If not on home page, navigate first then scroll to top
+      navigate("/");
+      setTimeout(() => {
+        scrollToTop();
+      }, 100);
+    }
+  };
+
+  const handleFeaturesClick = (e) => {
+    e.preventDefault();
+    closeMenu();
+    
+    // Check if we're already on the home page
+    if (window.location.pathname === "/") {
+      // If already on home page, just scroll to features
+      scrollToFeatures();
+    } else {
+      // If not on home page, navigate first then scroll
+      navigate("/");
+      // Try multiple times to find the element after navigation
+      let attempts = 0;
+      const maxAttempts = 10;
+      const tryScroll = () => {
+        if (scrollToFeatures() || attempts >= maxAttempts) {
+          return;
+        }
+        attempts++;
+        setTimeout(tryScroll, 100);
+      };
+      setTimeout(tryScroll, 200);
+    }
+  };
+
   return (
     <>
       <header ref={headerRef} className={`app-header ${menuOpen ? "is-open" : ""}`}>
@@ -72,8 +127,20 @@ export default function Header() {
                 key={item.to}
                 to={item.to}
                 end={item.end}
-                className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
-                onClick={closeMenu}
+                className={({ isActive }) => {
+                  // Features should never be active since it's just a scroll action
+                  if (item.to === "/#features") {
+                    return "nav-link";
+                  }
+                  return `nav-link ${isActive ? "active" : ""}`;
+                }}
+                onClick={
+                  item.to === "/#features" 
+                    ? handleFeaturesClick 
+                    : item.to === "/" 
+                    ? handleHomeClick 
+                    : closeMenu
+                }
               >
                 {item.label}
               </NavLink>
@@ -86,6 +153,12 @@ export default function Header() {
               onClick={() => { navigate("/signup"); closeMenu(); }}
             >
               Get Started
+            </button>
+            <button
+              className="login-btn"
+              onClick={() => { navigate("/login"); closeMenu(); }}
+            >
+              Login
             </button>
 
             <button
@@ -107,8 +180,20 @@ export default function Header() {
               key={item.to}
               to={item.to}
               end={item.end}
-              className={({ isActive }) => `mobile-link ${isActive ? "active" : ""}`}
-              onClick={closeMenu}
+              className={({ isActive }) => {
+                // Features should never be active since it's just a scroll action
+                if (item.to === "/#features") {
+                  return "mobile-link";
+                }
+                return `mobile-link ${isActive ? "active" : ""}`;
+              }}
+              onClick={
+                item.to === "/#features" 
+                  ? handleFeaturesClick 
+                  : item.to === "/" 
+                  ? handleHomeClick 
+                  : closeMenu
+              }
               role="menuitem"
             >
               {item.label}
@@ -116,6 +201,9 @@ export default function Header() {
           ))}
           <button className="mobile-link mobile-cta" onClick={() => { navigate("/signup"); closeMenu(); }}>
             Get Started
+          </button>
+          <button className="mobile-link mobile-cta" onClick={() => { navigate("/login"); closeMenu(); }}>
+            Login
           </button>
         </div>
 
@@ -145,7 +233,13 @@ export default function Header() {
               <ul className="footer-list">
                 {NAV_ITEMS.map((item) => (
                   <li key={item.to}>
-                    <NavLink to={item.to} end={item.end} onClick={closeMenu}>{item.label}</NavLink>
+                    <NavLink 
+                      to={item.to} 
+                      end={item.end} 
+                      onClick={item.to === "/#features" ? handleFeaturesClick : closeMenu}
+                    >
+                      {item.label}
+                    </NavLink>
                   </li>
                 ))}
               </ul>

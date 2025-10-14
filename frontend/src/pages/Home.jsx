@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import "../css/home.css";
 
 const easeOutQuad = (t) => t * (2 - t);
@@ -23,6 +24,7 @@ const AnimatedNumber = ({ value, prefix = "", suffix = "", duration = 1600 }) =>
 };
 
 const Home = () => {
+  const navigate = useNavigate();
   const [activeBtn, setActiveBtn] = useState(null);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
   const [vidIdx, setVidIdx] = useState(0);
@@ -257,7 +259,7 @@ const Home = () => {
         rating: 5,
         text: "The EPF tracking and festival budgeting features are exactly what Sri Lankan families need. Highly recommended!",
         avatar:
-          "https://images.unsplash.com/photo-1494790108755-2616b612b0b5?auto=format&fit=crop&w=150&q=80",
+          "https://images.unsplash.com/photo-1500917293891-ef795e70e1f6?auto=format&fit=crop&w=150&q=80",
       },
       {
         name: "Rohan Perera",
@@ -344,14 +346,20 @@ const Home = () => {
           <div className="hero-ctas reveal">
             <button
               className={`cta-btn ${activeBtn === "salary" ? "cta-primary" : "cta-secondary"}`}
-              onClick={() => setActiveBtn("salary")}
+              onClick={() => {
+                setActiveBtn("salary");
+                navigate("/login");
+              }}
               type="button"
             >
               Start Managing Your Salary
             </button>
             <button
               className={`cta-btn ${activeBtn === "works" ? "cta-primary" : "cta-secondary"}`}
-              onClick={() => setActiveBtn("works")}
+              onClick={() => {
+                setActiveBtn("works");
+                navigate("/seehow");
+              }}
               type="button"
             >
               See How It Works
@@ -553,8 +561,18 @@ const Home = () => {
             financial future with <strong>MyBudgetPal</strong>
           </p>
           <div className="cta-actions reveal">
-            <button className="cta-btn cta-primary">Get Started Free</button>
-            <button className="cta-btn cta-secondary">Schedule Demo</button>
+            <button 
+              className="cta-btn cta-primary"
+              onClick={() => navigate("/login")}
+            >
+              Get Started Free
+            </button>
+            <button 
+              className="cta-btn cta-secondary"
+              onClick={() => navigate("/contactus")}
+            >
+              Schedule Demo
+            </button>
           </div>
         </div>
       </section>

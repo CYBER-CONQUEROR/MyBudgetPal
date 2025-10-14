@@ -24,16 +24,16 @@ function normMonthToken(tok="") {
 export function parseSummaryTimeframe(utterance = "", now = new Date()) {
   const t = (utterance || "").toLowerCase();
 
-  // this month / last month / current month / next month
-  if (/\b(this|current)\s+month\b/.test(t)) {
+  // this month / last month / current month / next month (accept "months" typo/plural)
+  if (/\b(this|current)\s+months?\b/.test(t)) {
     return { month: now.getMonth() + 1, year: now.getFullYear(), label: "this_month" };
   }
-  if (/\blast\s+month\b/.test(t)) {
+  if (/\blast\s+months?\b/.test(t)) {
     const d = new Date(now);
     d.setMonth(d.getMonth() - 1);
     return { month: d.getMonth() + 1, year: d.getFullYear(), label: "last_month" };
   }
-  if (/\bnext\s+month\b/.test(t)) {
+  if (/\bnext\s+months?\b/.test(t)) {
     const d = new Date(now);
     d.setMonth(d.getMonth() + 1);
     return { month: d.getMonth() + 1, year: d.getFullYear(), label: "next_month" };
@@ -80,7 +80,7 @@ export function parseCategoryHint(utterance = "") {
   return hint;
 }
 
-// ---------- Helpers for commitment parsing ----------
+// ---------- Helpers ----------
 const toInt = (x) => (Number.isFinite(+x) ? Math.round(+x) : null);
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
@@ -277,7 +277,7 @@ export function parseCommitmentDraft(utterance = "", now = new Date()) {
   };
 }
 
-/* ---------- Helpers for the new Commitment Summary intent ---------- */
+/* ---------- Helpers for the Commitment Summary intent ---------- */
 const COMMITMENT_CATEGORIES = ["Loan", "Credit Card", "Insurance", "Bill", "Other"];
 const CAT_SYNS = [
   { re: /\b(loan|emi|instal?l?ment|mortgage)\b/i, to: "Loan" },
@@ -323,8 +323,6 @@ export function parseCommitmentSummaryQuery(utterance = "", now = new Date()) {
   // aggregate intent?
   const aggregate = /\b(total|sum|how\s+much|overall|grand\s+total|combined)\b/.test(t);
 
-  // default: if user said “commitments for October” and nothing else,
-  // we still return object with timeframe so handler can ask follow-ups.
   return {
     timeframe: timeframe || null,
     status: status || null,
@@ -418,7 +416,6 @@ function parseGoalPriorityFilter(text = "") {
 
 // accepts "for <goal name>" hint: e.g., "summary for Europe Trip"
 function parseGoalNameHint(text = "") {
-  const t = (text || "").toLowerCase();
   const m =
     text.match(/\bfor\s+([a-z][a-z0-9\s&-]{2,})$/i) ||
     text.match(/\babout\s+([a-z][a-z0-9\s&-]{2,})$/i);
@@ -443,9 +440,127 @@ export function parseSavingGoalSummaryQuery(utterance = "", now = new Date()) {
   };
 }
 
+/* ---------- NEW: Event Expense parsing (draft extractor) ---------- */
+/**
+ * Extract fields for creating an event expense (best-effort from one message).
+ * Returns:
+ * {
+ *   eventTitle: string|null,
+ *   amountLKR: number|null,
+ *   date: Date|null,
+ *   accountHint: string|null,
+ *   note: string|null
+ * }
+ */
+export function parseEventExpenseDraft(utterance = "", now = new Date()) {
+  const amountLKR = parseMoneyLKR(utterance);
+  const date = parseDateish(utterance, now);
+
+  // Title: after "event", "for", "called/named", etc.
+  let eventTitle = null;
+  const t = utterance || "";
+  const m1 = t.match(/\bevent\s*(?:is|called|named|:)\s*([^,.;\n]{2,})/i);
+  const m2 = t.match(/\b(?:for|about|regarding)\s+([^,.;\n]{2,})/i);
+  const m3 = t.match(/\bnew\s*event\s*[:\-]?\s*([^,.;\n]{2,})/i);
+  if (m1) eventTitle = m1[1].trim();
+  else if (m2) eventTitle = m2[1].trim();
+  else if (m3) eventTitle = m3[1].trim();
+
+  const accountHint = parseAccountHint(utterance);
+
+  // Note: capture any trailing free text after "note:"
+  let note = null;
+  const nm = t.match(/\bnote\s*[:\-]\s*([^;\n]+)/i);
+  if (nm) note = nm[1].trim();
+
+  return {
+    eventTitle: eventTitle || null,
+    amountLKR: amountLKR ?? null,
+    date: date || null,
+    accountHint: accountHint || null,
+    note: note || null,
+  };
+}
+
+/* ---------- NEW: Event Expense Summary parsing ---------- */
+/**
+ * Parse an "event expense summary" query.
+ * Supports phrases like:
+ *  - "give me the event summary"
+ *  - "event summery plz"
+ *  - "event expenses summary" / "event expense summary"
+ * Optional signals:
+ *  - timeframe (this month, last month, Oct 2025, 10/2025, 2025-10)
+ *  - event name hint: "for <event name>", "about <event name>"
+ *  - aggregate keywords: "total", "sum", "overall"
+ */
+export function parseEventExpenseSummaryQuery(utterance = "", now = new Date()) {
+  const t = (utterance || "").toLowerCase();
+
+  const timeframe = parseSummaryTimeframe(utterance, now);
+
+  // event name hint (for filtering a single event)
+  let eventHint = null;
+  const e1 = t.match(/\b(?:for|about|regarding)\s+([^,.;\n]{2,})/i);
+  if (e1) {
+    // strip trailing common summary words if any
+    eventHint = e1[1].trim().replace(/\s+(summary|summery|report|expense|expenses)$/i, "").trim();
+  }
+
+  const accountHint = parseAccountHint(utterance);
+
+  const aggregate = /\b(total|sum|overall|grand\s*total|combined)\b/.test(t);
+  const breakdownByCategory =
+    /\b(category[-\s]?wise|by\s+category|per\s+category|category\s+breakdown)\b/.test(t);
+
+  return {
+    timeframe: timeframe || null,
+    eventHint: eventHint || null,
+    accountHint: accountHint || null,
+    aggregate,
+    breakdownByCategory,
+  };
+}
+
+/* ---------- NEW: Budget Plan Summary parsing ---------- */
+/**
+ * Parse a "budget plan summary" query.
+ * Supports:
+ *  - "this month budget plan summery"
+ *  - "last months budget plan summary"
+ *  - "i need the budget summery"
+ *  - "budget plan report", "budget overview", etc.
+ * Returns: { timeframe }
+ */
+export function parseBudgetPlanSummaryQuery(utterance = "", now = new Date()) {
+  const timeframe = parseSummaryTimeframe(utterance, now);
+  return {
+    timeframe: timeframe || null,
+  };
+}
+
 // ---------- Intent detection ----------
 export async function detectIntent(utterance = "") {
   const t = (utterance || "").toLowerCase().trim();
+
+  // ===== NEW: Budget Plan Summary =====
+  {
+    const budgetish = /\bbudget(\s*plan|\s*planner)?s?\b/;
+    const summaryish =
+      /\b(summ(?:ary|arise|arize)|summery|report|breakdown|overview|analysis|stats?|total|sum)\b/;
+    const hasMonthRef =
+      /\b(this|current|last|next)\s+months?\b/i.test(t) ||
+      /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i.test(t) ||
+      /\b(0?[1-9]|1[0-2])[\/\-](\d{4})\b/.test(t) || // mm/yyyy
+      /\b(\d{4})[\/\-](0?[1-9]|1[0-2])\b/.test(t);   // yyyy-mm
+    if (budgetish.test(t) && (summaryish.test(t) || hasMonthRef)) {
+      return "budget_plan_summary";
+    }
+    // ultra short: "budget summary", "i need the budget summery"
+    if (/\bbudget\b/.test(t) && /\bsumm(?:ary|ery)\b/.test(t)) {
+      return "budget_plan_summary";
+    }
+  }
 
   // ===== NEW: Saving Goal Summary =====
   // Triggers: "saving goal(s) summary/summery/report/overview/total", optionally with month/priority
@@ -462,7 +577,6 @@ export async function detectIntent(utterance = "") {
   }
 
   // ===== NEW: Saving Goal (add) =====
-  // Triggers on: "new saving goal", "new goal", "add saving goal", "add new saving goal", "saving goal", "set goal to save ..."
   const createish = /\b(add|create|new|set\s*up|setup|set|start|make)\b/;
   const goalGeneric = /\bgoal\b/;
   const saveVerb = /\bsave|saving|save\s*up\b/;
@@ -476,6 +590,51 @@ export async function detectIntent(utterance = "") {
   }
   if (goalGeneric.test(t) && (createish.test(t) || saveVerb.test(t) || moneyOrDate.test(t))) {
     return "add_saving_goal";
+  }
+
+  // ===== NEW: Event Expense Summary =====
+  // Place BEFORE the generic "add_event_expense" detection to avoid mis-routing.
+  {
+    const eventWord = /\bevent(s)?\b/;
+    const expenseish = /\b(expense|expenses|spend|spending|cost|costs|payment|paid)\b/;
+    const summaryish =
+      /\b(summ(?:ary|arise|arize)|summery|report|breakdown|overview|analysis|stats?|total|sum)\b/;
+
+    const hasMonthRef3 =
+      /\b(this|current|last|next)\s+month\b/i.test(t) ||
+      /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i.test(t) ||
+      /\b(0?[1-9]|1[0-2])[\/\-](\d{4})\b/.test(t) ||
+      /\b(\d{4})[\/\-](0?[1-9]|1[0-2])\b/.test(t);
+
+    if (
+      (eventWord.test(t) && summaryish.test(t)) ||
+      (eventWord.test(t) && expenseish.test(t) && summaryish.test(t)) ||
+      (eventWord.test(t) && hasMonthRef3 && summaryish.test(t))
+    ) {
+      return "event_expense_summary";
+    }
+  }
+
+  // ===== NEW: Event Expense (add) — keep this ABOVE the generic expense block =====
+  // Triggers examples:
+  //  - "i want to add a new event"
+  //  - "i want to add a new event expense"
+  //  - "i wanna ad an event expense"   (typo 'ad' handled)
+  //  - "new event expense"
+  //  - "new event recode" / "event record"
+  {
+    const eventWord = /\bevent\b/;
+    const eventExpenseish = /\b(event\s*(expense|spend(ing)?|cost|record|recode|log|entry))\b/;
+    const addish = /\b(add?|ad|create|new|log|record|note|track|make|set\s*up|setup)\b/; // add/ad/new/etc
+    const financeish = /\b(expense|spend|spent|cost|bill|paid|payment|purchase)\b/;
+
+    if (
+      eventExpenseish.test(t) ||                // "event expense", "event record/recode", etc.
+      (addish.test(t) && eventWord.test(t)) ||  // "add new event", "new event", etc.
+      (eventWord.test(t) && financeish.test(t)) // "event payment", "event cost", etc.
+    ) {
+      return "add_event_expense";
+    }
   }
 
   // ===== NEW: Commitment Month Summary =====
@@ -494,12 +653,11 @@ export async function detectIntent(utterance = "") {
   }
 
   // ----- add bank commitment (recurring or one-off) -----
-  // Prioritize before generic expense to avoid misclassification.
   const commitKw = /\b(commitment|standing\s*order|auto[-\s]?pay|autopay|installment|instalment|emi|loan|mortgage|rent|premium|insurance|subscription|bill|credit\s*card\s*bill|credit\s*card\s*payment)\b/;
   const bankish = /\b(bank|account|card)\b/; // mentions bank/card/account
   const recish = /\b(recurring|repeat|every|monthly|weekly|daily|yearly)\b/;
   const createish2 = /\b(add|create|new|set\s*up|setup|log|record|schedule|make)\b/;
-  const badTypos = /\bexpens\b/; // “expens” typo (user example)
+  const badTypos = /\bexpens\b/; // “expens” typo
   if (
     (createish2.test(t) && (commitKw.test(t) || badTypos.test(t))) ||
     (commitKw.test(t) && (recish.test(t) || bankish.test(t))) ||
@@ -512,7 +670,7 @@ export async function detectIntent(utterance = "") {
   if (/\b(add|create|new)\b.*\b(account|bank|card)\b/.test(t)) return "add_account";
   if (/\b(bank|card)\b.*\baccount\b/.test(t)) return "add_account";
 
-  // ----- add day-to-day expense / expense -----
+  // ----- add day-to-day expense / expense (generic) -----
   if (
     /\b(dtd|day[\s-]*to[\s-]*day)\b.*\b(expense|expenses)\b/.test(t) ||
     /\b(expense|expenses)\b.*\b(dtd|day[\s-]*to[\s-]*day)\b/.test(t) ||

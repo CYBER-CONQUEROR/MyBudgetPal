@@ -9,7 +9,10 @@ import { handleDtdExpenseSummaryIntent } from "../intents/dtdExpenseSummaryInten
 import { handleAddBankCommitmentIntent } from "../intents/addBankCommitmentIntent.js";
 import { handleCommitmentSummaryIntent } from "../intents/commitmentSummaryIntent.js";
 import { handleAddSavingGoalIntent } from "../intents/addSavingGoalIntent.js";
-import { handleSavingGoalSummaryIntent } from "../intents/savingGoalSummaryIntent.js"; // NEW
+import { handleSavingGoalSummaryIntent } from "../intents/savingGoalSummaryIntent.js";
+import { handleAddEventExpenseIntent } from "../intents/addEventExpenseIntent.js";
+// NEW: Event Expense Summary
+import { handleEventExpenseSummaryIntent } from "../intents/eventExpenseSummaryIntent.js";
 
 // ===== Sessions =====
 import {
@@ -19,7 +22,10 @@ import {
   getBankCommitmentSession,
   getCommitmentSummarySession,
   getSavingGoalSession,
-  getSavingGoalSummarySession, // NEW
+  getSavingGoalSummarySession,
+  getEventExpenseSession,
+  // NEW: Event Expense Summary
+  getEventExpenseSummarySession,
 } from "../services/sessionStore.js";
 
 function sse(res, text) {
@@ -50,6 +56,12 @@ function readUtterance(req) {
 // Registry so we can add more intents without if/else ladders
 // (Order mainly affects the sticky-session scan logs)
 const INTENTS = {
+  // ===== NEW: Event Expense Summary =====
+  event_expense_summary: {
+    getSession: getEventExpenseSummarySession,
+    handler: handleEventExpenseSummaryIntent,
+  },
+
   // ===== NEW: Saving Goals Summary =====
   saving_goal_summary: {
     getSession: getSavingGoalSummarySession,
@@ -65,6 +77,13 @@ const INTENTS = {
     getSession: getSavingGoalSession,
     handler: handleAddSavingGoalIntent,
   },
+
+  // ===== Event Expense (add) =====
+  add_event_expense: {
+    getSession: getEventExpenseSession,
+    handler: handleAddEventExpenseIntent,
+  },
+
   add_account: {
     getSession: getAddAccountSession,
     handler: handleAddAccountIntent,
@@ -103,7 +122,9 @@ export async function chat(req, res) {
         "• `new bank commitment`\n" +
         "• `commitment summary for October`\n" +
         "• `add saving goal`\n" +
-        "• `saving goals summary`"
+        "• `saving goals summary`\n" +
+        "• `new event expense`\n" +
+        "• `event summary for this month`"
       );
       return sseEnd(res);
     }
@@ -130,7 +151,7 @@ export async function chat(req, res) {
     // 3) Fallback general chat (LLM answers; no DB claims)
     const system =
       "You are My Budget Pal Assistant. Be concise, friendly, and helpful about personal finance. " +
-      "If users ask to add/update/delete accounts/transactions/commitments/goals or summaries, do NOT claim it was done. " +
+      "If users ask to add/update/delete accounts/transactions/commitments/goals/events or summaries, do NOT claim it was done. " +
       "Instead, guide them or trigger the appropriate intent.";
     const messages = Array.isArray(req.body?.messages)
       ? req.body.messages

@@ -466,3 +466,155 @@ export function clearSavingGoalSummarySession(userId) {
   const existed = store.delete(k);
   console.log("[session] clear(goal-sum):", { k, existed });
 }
+
+/* =========================
+ * ADD EVENT EXPENSE (NEW)
+ * =========================
+ * Intent: "add_event_expense"
+ * Slots (suggested):
+ *   eventTitle     : string|null
+ *   amountLKR      : number|null
+ *   dateISO        : "YYYY-MM-DD"|null
+ *   accountId      : string|null
+ *   accountName    : string|null
+ *   note           : string|null
+ *
+ * step: "intro" -> ask missing -> "confirm"
+ */
+export function getEventExpenseSession(userId) {
+  const k = key(userId);
+  const s = k ? store.get(k) : null;
+  if (!k) { console.log("[session] get(event-exp): no key for userId", userId); return null; }
+  const hit = !!(s && s.intent === "add_event_expense");
+  console.log("[session] get(event-exp):", { k, hit, step: s?.step });
+  return hit ? s : null;
+}
+
+export function startEventExpenseSession(userId, seeds = {}) {
+  const k = key(userId);
+  if (!k) return null;
+  const session = {
+    intent: "add_event_expense",
+    slots: {
+      eventTitle: seeds.eventTitle ?? null,
+      amountLKR: seeds.amountLKR ?? null,
+      dateISO: seeds.dateISO ?? null,
+      accountId: seeds.accountId ?? null,
+      accountName: seeds.accountName ?? null,
+      note: seeds.note ?? null,
+    },
+    step: seeds.step || "intro",
+  };
+  store.set(k, session);
+  console.log("[session] start(event-exp):", { k, step: session.step, slots: session.slots });
+  return session;
+}
+
+export function updateEventExpenseSession(userId, patch) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "add_event_expense") return;
+  s.slots = { ...s.slots, ...patch };
+  store.set(k, s);
+  console.log("[session] update(event-exp):", { k, step: s.step, slots: s.slots });
+}
+
+export function setEventExpenseStep(userId, step) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "add_event_expense") return;
+  s.step = step;
+  store.set(k, s);
+  console.log("[session] step(event-exp):", { k, step });
+}
+
+export function clearEventExpenseSession(userId) {
+  const k = key(userId);
+  if (!k) return;
+  const existed = store.delete(k);
+  console.log("[session] clear(event-exp):", { k, existed });
+}
+
+/* =========================
+ * EVENT EXPENSE SUMMARY (NEW)
+ * =========================
+ * Intent: "event_expense_summary"
+ * Slots:
+ *   month                : number|null       // 1..12
+ *   year                 : number|null
+ *   label                : string|null       // "this_month" | "last_month" | "Oct 2025" etc.
+ *   eventHint            : string|null       // optional fuzzy filter like "for office party"
+ *   accountId            : string|null       // optional narrow to a single account
+ *   accountName          : string|null       // for display/fuzzy selection
+ *   aggregate            : boolean|null      // true => return total sum as well
+ *   breakdownByCategory  : boolean|null      // true => category-wise breakdown
+ *
+ * step: "intro" -> ask month if missing -> "ready" (handler computes & replies) -> clear
+ */
+export function getEventExpenseSummarySession(userId) {
+  const k = key(userId);
+  const s = k ? store.get(k) : null;
+  if (!k) { console.log("[session] get(event-sum): no key for userId", userId); return null; }
+  const hit = !!(s && s.intent === "event_expense_summary");
+  console.log("[session] get(event-sum):", { k, hit, step: s?.step });
+  return hit ? s : null;
+}
+
+export function startEventExpenseSummarySession(userId, seeds = {}) {
+  const k = key(userId);
+  if (!k) return null;
+
+  // seeds can be passed either flat or inside { timeframe: { month, year, label } }
+  const month = seeds.month ?? seeds.timeframe?.month ?? null;
+  const year = seeds.year ?? seeds.timeframe?.year ?? null;
+  const label = seeds.label ?? seeds.timeframe?.label ?? null;
+
+  const session = {
+    intent: "event_expense_summary",
+    slots: {
+      month,
+      year,
+      label,
+      eventHint: seeds.eventHint ?? null,
+      accountId: seeds.accountId ?? null,
+      accountName: seeds.accountName ?? null,
+      aggregate: (seeds.aggregate === true) ? true : (seeds.aggregate === false ? false : null),
+      breakdownByCategory: (seeds.breakdownByCategory === true)
+        ? true
+        : (seeds.breakdownByCategory === false ? false : null),
+    },
+    step: seeds.step || "intro",
+  };
+  store.set(k, session);
+  console.log("[session] start(event-sum):", { k, step: session.step, slots: session.slots });
+  return session;
+}
+
+export function updateEventExpenseSummarySession(userId, patch) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "event_expense_summary") return;
+  s.slots = { ...s.slots, ...patch };
+  store.set(k, s);
+  console.log("[session] update(event-sum):", { k, step: s.step, slots: s.slots });
+}
+
+export function setEventExpenseSummaryStep(userId, step) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "event_expense_summary") return;
+  s.step = step;
+  store.set(k, s);
+  console.log("[session] step(event-sum):", { k, step });
+}
+
+export function clearEventExpenseSummarySession(userId) {
+  const k = key(userId);
+  if (!k) return;
+  const existed = store.delete(k);
+  console.log("[session] clear(event-sum):", { k, existed });
+}

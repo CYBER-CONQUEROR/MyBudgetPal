@@ -14,6 +14,80 @@ const fmtLKR = (cents) => {
   return `LKR ${rupees.toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
+// New utility: format money input with commas and limit decimals
+const formatMoneyInput = (value, { allowNegative = false, maxDecimals = 2 } = {}) => {
+  if (value === "" || value == null) return "";
+  
+  let stringValue = String(value);
+  
+  // Prevent input starting with decimal point
+  if (stringValue.startsWith(".")) {
+    return "";
+  }
+  
+  // Handle negative numbers if allowed
+  const isNegative = allowNegative && stringValue.startsWith("-");
+  if (isNegative) {
+    stringValue = stringValue.slice(1);
+  }
+  
+  // Check if user is typing a decimal (ends with .)
+  const endsWithDot = stringValue.endsWith(".");
+  const hasDecimal = stringValue.includes(".");
+  
+  // Remove all non-digit characters except decimal point
+  let cleanValue = stringValue.replace(/[^\d.]/g, "");
+  
+  // Handle multiple decimal points - keep only the first one
+  const decimalParts = cleanValue.split(".");
+  if (decimalParts.length > 2) {
+    cleanValue = decimalParts[0] + "." + decimalParts.slice(1).join("");
+  }
+  
+  // Split into integer and decimal parts
+  let [integerPart, decimalPart = ""] = cleanValue.split(".");
+  
+  // Remove leading zeros from integer part (but allow single zero)
+  if (integerPart.length > 1) {
+    integerPart = integerPart.replace(/^0+(?=\d)/, "");
+  }
+  if (integerPart === "") integerPart = "0";
+  
+  // Limit decimal places
+  if (decimalPart.length > maxDecimals) {
+    decimalPart = decimalPart.slice(0, maxDecimals);
+  }
+  
+  // Add commas to integer part only if it's not empty and not just "0"
+  let integerWithCommas = integerPart;
+  if (integerPart !== "0") {
+    integerWithCommas = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+  
+  // Reconstruct the value
+  let result = integerWithCommas;
+  if (hasDecimal || endsWithDot) {
+    result += "." + decimalPart;
+    // If user was typing a decimal point, preserve it
+    if (endsWithDot && !decimalPart) {
+      result += "";
+    }
+  }
+  
+  // Add back negative sign if needed
+  if (isNegative) {
+    result = "-" + result;
+  }
+  
+  return result;
+};
+
+// Utility: parse formatted money string back to number string without commas
+const parseMoneyInput = (formattedValue) => {
+  if (formattedValue === "" || formattedValue == null) return "";
+  return formattedValue.replace(/,/g, "");
+};
+
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,11 +155,8 @@ export default function AccountsPage() {
       if (typeFilter !== "All Types" && a.type !== typeFilter) return false;
       if (instFilter !== "All Institutions" && a.institution !== instFilter) return false;
       if (!term) return true;
-      return (
-        (a.name || "").toLowerCase().includes(term) ||
-        (a.institution || "").toLowerCase().includes(term) ||
-        (a.numberMasked || "").toLowerCase().includes(term)
-      );
+      // Updated search logic: only show account names starting with the search letter
+      return (a.name || "").toLowerCase().startsWith(term);
     });
   }, [accounts, q, typeFilter, instFilter, showArchived]);
 
@@ -191,12 +262,12 @@ export default function AccountsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 text-slate-900">
       {/* Header */}
       <div className="max-w-6xl mx-auto px-4 md:px-6 py-8">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-blue-600 to-blue-800">
               Accounts
             </h1>
             <p className="text-slate-600 mt-1">
@@ -204,16 +275,16 @@ export default function AccountsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={onCreate} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]">
+            <button onClick={onCreate} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2 text-sm font-semibold shadow-lg hover:shadow-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 active:scale-[.99]">
               <Plus size={18} /> Add Account
             </button>
-            <button onClick={() => setAction({ type: "transfer" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]">
+            <button onClick={() => setAction({ type: "transfer" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 text-white px-4 py-2 text-sm font-semibold shadow-lg hover:shadow-xl hover:from-blue-600 hover:to-blue-700 transition-all duration-200 active:scale-[.99]">
               <ArrowRightLeft size={18} /> Transfer
             </button>
-            <button onClick={() => setAction({ type: "deposit" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]">
+            <button onClick={() => setAction({ type: "deposit" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-4 py-2 text-sm font-semibold shadow-lg hover:shadow-xl hover:from-emerald-600 hover:to-emerald-700 transition-all duration-200 active:scale-[.99]">
               <ArrowDownCircle size={18} /> Deposit
             </button>
-            <button onClick={() => setAction({ type: "withdraw" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white px-4 py-2 text-sm font-semibold shadow hover:opacity-95 active:scale-[.99]">
+            <button onClick={() => setAction({ type: "withdraw" })} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white px-4 py-2 text-sm font-semibold shadow-lg hover:shadow-xl hover:from-amber-600 hover:to-amber-700 transition-all duration-200 active:scale-[.99]">
               <ArrowUpCircle size={18} /> Withdraw
             </button>
           </div>
@@ -227,7 +298,7 @@ export default function AccountsPage() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search by name, institution, or mask"
-              className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+              className="w-full rounded-xl border border-slate-300 bg-white pl-10 pr-3 py-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
             />
           </div>
 
@@ -236,7 +307,7 @@ export default function AccountsPage() {
               <select
                 value={typeFilter}
                 onChange={(e) => setTypeFilter(e.target.value)}
-                className="appearance-none rounded-xl border border-slate-200 bg-white px-5 py-2 pr-8 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                className="appearance-none rounded-xl border border-slate-300 bg-white px-5 py-2.5 pr-8 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
               >
                 <option>All Types</option>
                 <option value="bank">Bank</option>
@@ -250,7 +321,7 @@ export default function AccountsPage() {
               <select
                 value={instFilter}
                 onChange={(e) => setInstFilter(e.target.value)}
-                className="appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2 pr-8 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                className="appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-8 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
               >
                 <option>All Institutions</option>
                 {Array.from(new Set([...banksLK, ...institutionsInData])).map((b) => (
@@ -265,9 +336,9 @@ export default function AccountsPage() {
               <button
                 type="button"
                 onClick={() => setShowArchived((s) => !s)}
-                className={`h-6 w-11 rounded-full p-[2px] transition ${showArchived ? "bg-blue-600" : "bg-slate-300"}`}
+                className={`h-6 w-11 rounded-full p-[2px] transition-all duration-200 ${showArchived ? "bg-blue-600" : "bg-slate-400"}`}
               >
-                <span className={`block h-5 w-5 rounded-full bg-white shadow transition ${showArchived ? "translate-x-5" : "translate-x-0"}`} />
+                <span className={`block h-5 w-5 rounded-full bg-white shadow-lg transition-all duration-200 ${showArchived ? "translate-x-5" : "translate-x-0"}`} />
               </button>
             </label>
           </div>
@@ -329,7 +400,7 @@ export default function AccountsPage() {
       {confirmDeleteOpen && (
         <ConfirmDialog
           title="Delete permanently?"
-          message="This will permanently delete the account. You can’t undo this action."
+          message="This will permanently delete the account. You can't undo this action."
           confirmLabel="Delete"
           variant="danger"
           onCancel={() => { setConfirmDeleteOpen(false); setToDelete(null); }}
@@ -432,8 +503,8 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
   return (
     <div
       className={`
-        group relative rounded-2xl border border-slate-200 bg-white/90 backdrop-blur
-        shadow-[0_1px_2px_rgba(0,0,0,.05)] hover:shadow-[0_10px_30px_rgba(2,6,23,.08)]
+        group relative rounded-2xl border border-slate-300 bg-white/90 backdrop-blur
+        shadow-[0_2px_8px_rgba(0,0,0,.08)] hover:shadow-[0_10px_30px_rgba(2,6,23,.12)]
         transition-all duration-300 hover:-translate-y-[3px] overflow-hidden
       `}
     >
@@ -482,7 +553,7 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
         </div>
 
         {/* Balance block */}
-        <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
           <div className="flex items-end justify-between gap-3">
             <div>
               <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -512,7 +583,7 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
         <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={onView}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[.99]"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-400 active:scale-[.99]"
           >
             <Eye className="h-4 w-4" /> View
           </button>
@@ -520,7 +591,7 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
           {!isCash && (
             <button
               onClick={onEdit}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[.99]"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-400 active:scale-[.99]"
             >
               <PencilLine className="h-4 w-4" /> Edit
             </button>
@@ -530,7 +601,7 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
             !archived ? (
               <button
                 onClick={onArchive}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-700 shadow-sm transition hover:bg-rose-100 active:scale-[.99]"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700 shadow-sm transition-all hover:bg-amber-100 hover:border-amber-400 active:scale-[.99]"
               >
                 <Archive className="h-4 w-4" /> Archive
               </button>
@@ -538,7 +609,7 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
               <>
                 <button
                   onClick={onUnarchive}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 active:scale-[.99]"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 shadow-sm transition-all hover:bg-emerald-100 hover:border-emerald-400 active:scale-[.99]"
                 >
                   <Archive className="h-4 w-4" /> Unarchive
                 </button>
@@ -547,9 +618,9 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
                   onClick={canDelete ? onDelete : undefined}
                   disabled={!canDelete}
                   title={deleteReason}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium shadow-sm transition active:scale-[.99] ${canDelete
-                      ? "border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
-                      : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium shadow-sm transition-all active:scale-[.99] ${canDelete
+                      ? "border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400"
+                      : "cursor-not-allowed border border-slate-300 bg-slate-50 text-slate-400"
                     }`}
                 >
                   <Trash2 className="h-4 w-4" /> Delete
@@ -561,22 +632,22 @@ function AccountCard({ account, onView, onEdit, onArchive, onUnarchive, onDelete
       </div>
 
       {/* Subtle hover highlight */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-indigo-500/[.04] to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-blue-500/[.06] to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
     </div>
   );
 }
 
 function EmptyState({ onCreate }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
-      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 border border-blue-100">
+    <div className="rounded-2xl border border-dashed border-slate-400 bg-white p-10 text-center">
+      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 border border-blue-200">
         <Building2 />
       </div>
       <h3 className="text-lg font-semibold">No accounts yet</h3>
       <p className="mt-1 text-slate-600">Create a bank or card account to get started.</p>
       <button
         onClick={onCreate}
-        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-white hover:opacity-95"
+        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-white shadow-lg hover:shadow-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200"
       >
         <Plus size={18} /> Create account
       </button>
@@ -588,20 +659,20 @@ function SkeletonGrid() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="rounded-2xl border border-slate-200 bg-white p-5 animate-pulse">
+        <div key={i} className="rounded-2xl border border-slate-300 bg-white p-5 animate-pulse">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="h-9 w-9 rounded-xl bg-slate-200" />
+              <div className="h-9 w-9 rounded-xl bg-slate-300" />
               <div>
-                <div className="h-4 w-40 rounded bg-slate-200" />
-                <div className="mt-2 h-3 w-56 rounded bg-slate-100" />
+                <div className="h-4 w-40 rounded bg-slate-300" />
+                <div className="mt-2 h-3 w-56 rounded bg-slate-200" />
               </div>
             </div>
-            <div className="h-5 w-16 rounded-full bg-slate-200" />
+            <div className="h-5 w-16 rounded-full bg-slate-300" />
           </div>
           <div className="mt-4 flex justify-end gap-2">
-            <div className="h-8 w-20 rounded-lg bg-slate-100" />
-            <div className="h-8 w-24 rounded-lg bg-slate-100" />
+            <div className="h-8 w-20 rounded-lg bg-slate-200" />
+            <div className="h-8 w-24 rounded-lg bg-slate-200" />
           </div>
         </div>
       ))}
@@ -611,30 +682,6 @@ function SkeletonGrid() {
 
 /* ---------- Modals ---------- */
 
-// Utility: sanitize a money string (no commas) with support for typing a trailing dot.
-const sanitizeMoney = (raw, { keepTrailingDot = false } = {}) => {
-  if (raw == null) return "";
-  let v = String(raw).replace(/[^\d.]/g, "");
-  if (v === "") return "";
-  // keep first dot only
-  const firstDot = v.indexOf(".");
-  if (firstDot !== -1) v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, "");
-  // if starts with ".", prefix 0
-  if (v.startsWith(".")) v = "0" + v;
-  let [i = "", d = ""] = v.split(".");
-  // strip leading zeros but keep single 0
-  i = i.replace(/^0+(?=\d)/, "");
-  // clamp integer and decimals
-  if (i.length > 8) i = i.slice(0, 8);
-  if (d.length > 2) d = d.slice(0, 2);
-
-  // preserve trailing dot while typing (e.g., "12.")
-  const endsWithDot = v.endsWith(".");
-  if (endsWithDot && keepTrailingDot) return (i || "0") + ".";
-
-  return d.length ? `${i || "0"}.${d}` : (v.includes(".") ? (i || "0") + "." : (i || "0"));
-};
-
 // Create / Edit (create shows Opening Balance)
 function AccountFormModal({ banks, initial, onClose, onSave }) {
   const isEdit = !!initial;
@@ -643,7 +690,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
   const [institution, setInstitution] = useState(initial?.institution || "");
   const [numberMasked, setNumberMasked] = useState(initial?.numberMasked || "");
   const [creditLimit, setCreditLimit] = useState(
-    initial?.creditLimitCents != null ? (initial.creditLimitCents / 100).toString() : ""
+    initial?.creditLimitCents != null ? formatMoneyInput((initial.creditLimitCents / 100).toString()) : ""
   );
 
   const [openingBalance, setOpeningBalance] = useState("");
@@ -659,9 +706,10 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
   const MASKED_ALLOWED = /^[\d*]+$/;
   const MAX_AMOUNT = 99999999.99;
 
-  const toCents = (s) => {
-    if (s === "" || s == null || s === ".") return 0;
-    const n = Number(s);
+  const toCents = (formattedValue) => {
+    const cleanValue = parseMoneyInput(formattedValue);
+    if (cleanValue === "" || cleanValue == null || cleanValue === ".") return 0;
+    const n = Number(cleanValue);
     if (!Number.isFinite(n)) return null;
     return Math.round(n * 100);
   };
@@ -702,24 +750,29 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
     setMaskedErr("");
   };
 
-  // Opening balance (no commas; allow "0.", "12.", "12.3", "12.34")
+  // Opening balance with comma formatting
   const onOpeningChange = (e) => {
-    const hadTrailingDot = /\.$/.test(e.target.value);
-    const next = sanitizeMoney(e.target.value, { keepTrailingDot: hadTrailingDot });
+    const formatted = formatMoneyInput(e.target.value);
     setOpeningErr("");
-    setOpeningBalance(next);
+    setOpeningBalance(formatted);
   };
 
   const onOpeningBlur = () => {
     const cents = toCents(openingBalance);
     if (cents == null) return;
-    setOpeningBalance((cents / 100).toFixed(2));
+    setOpeningBalance(formatMoneyInput((cents / 100).toFixed(2)));
   };
 
-  // Credit limit (same behavior)
-  const onCreditLimitChange = (v) => {
-    const hadTrailingDot = /\.$/.test(v);
-    setCreditLimit(sanitizeMoney(v, { keepTrailingDot: hadTrailingDot }));
+  // Credit limit with comma formatting
+  const onCreditLimitChange = (e) => {
+    const formatted = formatMoneyInput(e.target.value);
+    setCreditLimit(formatted);
+  };
+
+  const onCreditLimitBlur = () => {
+    const cents = toCents(creditLimit);
+    if (cents == null) return;
+    setCreditLimit(formatMoneyInput((cents / 100).toFixed(2)));
   };
 
   // Submit
@@ -740,7 +793,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
       const raw = (creditLimit || "").trim();
       if (!raw && !isEdit) { setErr("Credit limit is required for card accounts"); return; }
       if (raw) {
-        const cents = Math.round(Number(raw) * 100);
+        const cents = toCents(raw);
         if (!Number.isFinite(cents) || cents < 0) { setErr("Credit limit must be a non-negative number"); return; }
         cl = cents;
       }
@@ -748,7 +801,6 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
 
     let openingBalanceCents;
     if (!isEdit) {
-      if ((openingBalance || "").startsWith(".")) { setOpeningErr("Amount cannot start with a decimal point"); return; }
       const cents = toCents(openingBalance);
       if (cents == null) { setOpeningErr("Invalid amount"); return; }
       if (cents / 100 > MAX_AMOUNT) { setOpeningErr("Maximum is 99,999,999.99"); return; }
@@ -786,7 +838,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+      <div className="relative w-full max-w-lg rounded-2xl border border-slate-300 bg-white p-6 shadow-2xl">
         <h3 className="text-lg font-semibold">{isEdit ? "Edit Account" : "Add Account"}</h3>
 
         <form onSubmit={submit} className="mt-4 space-y-4">
@@ -797,7 +849,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
                 value={type}
                 onChange={(e) => setType(e.target.value)}
                 disabled={isEdit}
-                className="mt-1 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200 disabled:bg-slate-50"
+                className="mt-1 w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200 disabled:bg-slate-50"
               >
                 <option value="bank">Bank</option>
                 <option value="card">Card</option>
@@ -816,7 +868,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
                 onPaste={handleNamePaste}
                 placeholder={type === "card" ? "Visa Main" : "HNB Salary"}
                 inputMode="text"
-                className={`mt-1 w-full rounded-xl border px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200 ${nameErr ? "border-rose-300" : "border-slate-200"
+                className={`mt-1 w-full rounded-xl border px-3 py-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200 ${nameErr ? "border-rose-300" : "border-slate-300"
                   }`}
               />
               {nameErr && <p className="mt-1 text-xs text-rose-600">{nameErr}</p>}
@@ -829,7 +881,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
               <select
                 value={institution}
                 onChange={(e) => setInstitution(e.target.value)}
-                className="mt-1 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                className="mt-1 w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
               >
                 <option value="">Select (optional)</option>
                 {banks.map((b) => (
@@ -845,7 +897,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
                 onChange={(e) => onMaskedChange(e.target.value)}
                 placeholder="e.g., ****1234"
                 inputMode="numeric"
-                className={`mt-1 w-full rounded-xl border px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200 ${maskedErr ? "border-rose-300" : "border-slate-200"
+                className={`mt-1 w-full rounded-xl border px-3 py-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200 ${maskedErr ? "border-rose-300" : "border-slate-300"
                   }`}
               />
               <p className="mt-1 text-xs text-slate-500">Only last digits. Never store full numbers.</p>
@@ -860,9 +912,10 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
                 type="text"
                 inputMode="decimal"
                 value={creditLimit}
-                onChange={(e) => onCreditLimitChange(e.target.value)}
+                onChange={onCreditLimitChange}
+                onBlur={onCreditLimitBlur}
                 placeholder="0.00"
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
               />
             </div>
           )}
@@ -878,11 +931,11 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
                 onChange={onOpeningChange}
                 onBlur={onOpeningBlur}
                 placeholder="0.00"
-                className={`mt-1 w-full rounded-xl border px-3 py-2 focus:outline-none focus:ring-4 focus:ring-blue-200 ${openingErr ? "border-rose-300" : "border-slate-200"
+                className={`mt-1 w-full rounded-xl border px-3 py-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200 ${openingErr ? "border-rose-300" : "border-slate-300"
                   }`}
               />
               <p className="mt-1 text-xs text-slate-500">
-                Up to 2 decimals · Max 99,999,999.99 · can’t start with “.”
+                Up to 2 decimals · Max 99,999,999.99
               </p>
               {openingErr && <p className="mt-1 text-xs text-rose-600">{openingErr}</p>}
             </div>
@@ -894,7 +947,7 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
               <input
                 value="LKR"
                 disabled
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-slate-700"
               />
             </div>
           </div>
@@ -909,14 +962,14 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-700 hover:bg-slate-50"
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all duration-200"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving || !!nameErr || !!maskedErr || !!openingErr}
-              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-white hover:opacity-95 disabled:opacity-70"
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-white shadow-lg hover:shadow-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 disabled:opacity-70"
             >
               {saving ? "Saving..." : isEdit ? "Save Changes" : "Create Account"}
             </button>
@@ -930,22 +983,22 @@ function AccountFormModal({ banks, initial, onClose, onSave }) {
 function ConfirmDialog({ title, message, confirmLabel = "Confirm", variant = "primary", onCancel, onConfirm }) {
   const style =
     variant === "danger"
-      ? "bg-gradient-to-r from-rose-600 to-red-600 hover:opacity-95"
-      : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95";
+      ? "bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 shadow-lg hover:shadow-xl"
+      : "bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-lg hover:shadow-xl";
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
-      <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+      <div className="relative w-full max-w-sm rounded-2xl border border-slate-300 bg-white p-6 shadow-2xl">
         <h3 className="text-lg font-semibold">{title}</h3>
         <p className="mt-2 text-slate-700">{message}</p>
         <div className="mt-4 flex items-center justify-end gap-2">
           <button
             onClick={onCancel}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50"
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all duration-200"
           >
             Cancel
           </button>
-          <button onClick={onConfirm} className={`rounded-xl px-4 py-2 text-white ${style}`}>
+          <button onClick={onConfirm} className={`rounded-xl px-4 py-2 text-white transition-all duration-200 ${style}`}>
             {confirmLabel}
           </button>
         </div>
@@ -958,7 +1011,7 @@ function ConfirmDialog({ title, message, confirmLabel = "Confirm", variant = "pr
 function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
-  const [amount, setAmount] = useState(""); // plain string, supports "12.", "0.5", etc.
+  const [amount, setAmount] = useState(""); // formatted string with commas
   const [err, setErr] = useState("");
 
   const active = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
@@ -986,18 +1039,25 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
   const toAcc = byId[toId];
 
   const MAX_AMOUNT = 99999999.99;
-  const toCents = (str) => {
-    if (!str || str === ".") return null;
-    const n = Number(str);
+  
+  const toCents = (formattedValue) => {
+    const cleanValue = parseMoneyInput(formattedValue);
+    if (!cleanValue || cleanValue === ".") return null;
+    const n = Number(cleanValue);
     if (!Number.isFinite(n)) return null;
     return Math.round(n * 100);
   };
 
   const onAmountChange = (e) => {
-    const hadTrailingDot = /\.$/.test(e.target.value);
-    const next = sanitizeMoney(e.target.value, { keepTrailingDot: hadTrailingDot });
+    const formatted = formatMoneyInput(e.target.value);
     setErr("");
-    setAmount(next);
+    setAmount(formatted);
+  };
+
+  const onAmountBlur = () => {
+    const cents = toCents(amount);
+    if (cents == null) return;
+    setAmount(formatMoneyInput((cents / 100).toFixed(2)));
   };
 
   // available logic
@@ -1059,7 +1119,7 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+      <div className="relative w-full max-w-md rounded-2xl border border-slate-300 bg-white p-6 shadow-2xl">
         <h3 className="text-lg font-semibold">{titleMap[type] || "Action"}</h3>
 
         <form onSubmit={submit} className="mt-4 space-y-4">
@@ -1070,7 +1130,7 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
                 <select
                   value={fromId}
                   onChange={(e) => setFromId(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 p-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
                 >
                   <option value="">Select</option>
                   {nonCash.map((a) => (
@@ -1090,7 +1150,7 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
                 <select
                   value={toId}
                   onChange={(e) => setToId(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 p-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
                 >
                   <option value="">Select</option>
                   {nonCash.map((a) => (
@@ -1110,7 +1170,7 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
               <select
                 value={toId}
                 onChange={(e) => setToId(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 p-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                className="w-full rounded-xl border border-slate-300 p-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
               >
                 <option value="">Select</option>
                 {banks.map((a) => (
@@ -1134,7 +1194,7 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
               <select
                 value={toId}
                 onChange={(e) => setToId(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 p-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                className="w-full rounded-xl border border-slate-300 p-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
               >
                 <option value="">Select</option>
                 {banks.map((a) => (
@@ -1161,8 +1221,9 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
               inputMode="decimal"
               value={amount}
               onChange={onAmountChange}
+              onBlur={onAmountBlur}
               placeholder="0.00"
-              className="w-full rounded-xl border border-slate-200 p-2 focus:outline-none focus:ring-4 focus:ring-blue-200"
+              className="w-full rounded-xl border border-slate-300 p-2.5 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 transition-all duration-200"
             />
             {availableCents > 0 && (
               <p className="text-xs text-slate-500 mt-1">
@@ -1177,14 +1238,14 @@ function MoneyActionModal({ type, accounts, onClose, onConfirm }) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50"
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all duration-200"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={confirmDisabled}
-              className="rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 hover:opacity-95"
+              className="rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2 shadow-lg hover:shadow-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 disabled:opacity-70"
             >
               Confirm
             </button>
@@ -1215,7 +1276,7 @@ function AccountDetailsModal({ account, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+      <div className="relative w-full max-w-lg rounded-2xl border border-slate-300 bg-white p-6 shadow-2xl">
         <h3 className="text-lg font-semibold">Account Details</h3>
         <div className="mt-4 divide-y divide-slate-100">
           {rows.map(([label, value]) => (
@@ -1228,7 +1289,7 @@ function AccountDetailsModal({ account, onClose }) {
         <div className="mt-4 flex justify-end">
           <button
             onClick={onClose}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50"
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all duration-200"
           >
             Close
           </button>

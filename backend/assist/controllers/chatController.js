@@ -13,6 +13,8 @@ import { handleSavingGoalSummaryIntent } from "../intents/savingGoalSummaryInten
 import { handleAddEventExpenseIntent } from "../intents/addEventExpenseIntent.js";
 // NEW: Event Expense Summary
 import { handleEventExpenseSummaryIntent } from "../intents/eventExpenseSummaryIntent.js";
+// NEW: Budget Plan Summary
+import { handleBudgetPlanSummaryIntent } from "../intents/budgetPlanSummaryIntent.js";
 
 // ===== Sessions =====
 import {
@@ -26,6 +28,8 @@ import {
   getEventExpenseSession,
   // NEW: Event Expense Summary
   getEventExpenseSummarySession,
+  // NEW: Budget Plan Summary
+  getBudgetPlanSummarySession,
 } from "../services/sessionStore.js";
 
 function sse(res, text) {
@@ -56,6 +60,12 @@ function readUtterance(req) {
 // Registry so we can add more intents without if/else ladders
 // (Order mainly affects the sticky-session scan logs)
 const INTENTS = {
+  // ===== NEW: Budget Plan Summary =====
+  budget_plan_summary: {
+    getSession: getBudgetPlanSummarySession,
+    handler: handleBudgetPlanSummaryIntent,
+  },
+
   // ===== NEW: Event Expense Summary =====
   event_expense_summary: {
     getSession: getEventExpenseSummarySession,
@@ -124,7 +134,8 @@ export async function chat(req, res) {
         "• `add saving goal`\n" +
         "• `saving goals summary`\n" +
         "• `new event expense`\n" +
-        "• `event summary for this month`"
+        "• `event summary for this month`\n" +
+        "• `budget plan summary for this month`"
       );
       return sseEnd(res);
     }

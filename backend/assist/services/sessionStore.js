@@ -618,3 +618,78 @@ export function clearEventExpenseSummarySession(userId) {
   const existed = store.delete(k);
   console.log("[session] clear(event-sum):", { k, existed });
 }
+
+/* =========================
+ * BUDGET PLAN SUMMARY (NEW)
+ * =========================
+ * Intent: "budget_plan_summary"
+ * Slots:
+ *   month : number|null   // 1..12
+ *   year  : number|null
+ *   label : string|null   // "this_month" | "last_month" | "Oct 2025" etc.
+ *
+ * step: "intro" -> ask month if missing -> "ready" (handler computes & replies) -> clear
+ */
+export function getBudgetPlanSummarySession(userId) {
+  const k = key(userId);
+  const s = k ? store.get(k) : null;
+  if (!k) { console.log("[session] get(budget-sum): no key for userId", userId); return null; }
+  const hit = !!(s && s.intent === "budget_plan_summary");
+  console.log("[session] get(budget-sum):", { k, hit, step: s?.step });
+  return hit ? s : null;
+}
+
+export function startBudgetPlanSummarySession(userId, seeds = {}) {
+  const k = key(userId);
+  if (!k) return null;
+  const session = {
+    intent: "budget_plan_summary",
+    slots: {
+      month: seeds.month ?? seeds.timeframe?.month ?? null,
+      year: seeds.year ?? seeds.timeframe?.year ?? null,
+      label: seeds.label ?? seeds.timeframe?.label ?? null,
+    },
+    step: seeds.step || "intro",
+  };
+  store.set(k, session);
+  console.log("[session] start(budget-sum):", { k, step: session.step, slots: session.slots });
+  return session;
+}
+
+export function updateBudgetPlanSummarySession(userId, patch) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "budget_plan_summary") return;
+  s.slots = { ...s.slots, ...patch };
+  store.set(k, s);
+  console.log("[session] update(budget-sum):", { k, step: s.step, slots: s.slots });
+}
+
+export function setBudgetPlanSummaryStep(userId, step) {
+  const k = key(userId);
+  if (!k) return;
+  const s = store.get(k);
+  if (!s || s.intent !== "budget_plan_summary") return;
+  s.step = step;
+  store.set(k, s);
+  console.log("[session] step(budget-sum):", { k, step });
+}
+
+export function clearBudgetPlanSummarySession(userId) {
+  const k = key(userId);
+  if (!k) return;
+  const existed = store.delete(k);
+  console.log("[session] clear(budget-sum):", { k, existed });
+}
+
+/* =========================
+ * (Optional) CLEAR ALL for a user
+ * ========================= */
+export function clearAnySession(userId) {
+  const k = key(userId);
+  if (!k) return false;
+  const existed = store.delete(k);
+  console.log("[session] clear(any):", { k, existed });
+  return existed;
+}

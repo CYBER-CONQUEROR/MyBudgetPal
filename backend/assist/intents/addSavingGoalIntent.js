@@ -1,4 +1,4 @@
-// assist/intents/addSavingGoalIntent.js
+// = FILE: assist/intents/addSavingGoalIntent.js
 import mongoose from "mongoose";
 
 // --- Model (adjust path if your structure differs) ---
@@ -53,16 +53,17 @@ function fromISODateLocal(iso) {
 }
 
 /* =========================================================
-   Smart parsing (any order, free text)
+   Smarter parsing (any order, free text, colonless keys)
 ========================================================= */
-// Amount parsing for EXPLICIT values (key:value)
+
+// ---- Amount parsing for EXPLICIT values (key/value) ----
 function parseAmountLKRExplicit(text = "") {
   const t = text.toLowerCase().replace(/[, ]/g, "");
   const k = t.match(/(\d+(?:\.\d+)?)k\b/i);
   if (k) return Math.round(parseFloat(k[1]) * 1000);
   const m = text.match(/(?:rs\.?|lkr|රු|r\.)\s*([\d,.]+)(?:\s*\/-)?/i);
   if (m) return Math.round(parseFloat(m[1].replace(/,/g, "")));
-  // As a last resort for explicit fields only, allow plain number if clearly not a date fragment:
+  // allow plain number (ONLY inside explicit key handling)
   const lone = text.trim();
   if (/^\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?$/.test(lone)) {
     return Math.round(parseFloat(lone.replace(/,/g, "")));
@@ -70,7 +71,7 @@ function parseAmountLKRExplicit(text = "") {
   return null;
 }
 
-// Priority: maps synonyms to low/medium/high (stored lowercase)
+// ---- Priority synonyms -> low|medium|high ----
 function parsePrioritySmart(text = "") {
   const t = text.toLowerCase();
   if (/\b(high|top|urgent|asap|critical|important|high\s*prio|prio\s*high|🔥)\b/.test(t)) return "high";
@@ -79,7 +80,7 @@ function parsePrioritySmart(text = "") {
   return null;
 }
 
-// Date parsing (smart)
+// ---- Date parsing (smart, many formats) ----
 function parseDateish(utterance = "", now = new Date()) {
   const t = utterance.toLowerCase().trim();
 
@@ -90,7 +91,7 @@ function parseDateish(utterance = "", now = new Date()) {
   const dmy = t.match(/\b(0?[1-9]|[12]\d|3[01])[\/\-](0?[1-9]|1[0-2])[\/\-](\d{4})\b/);
   if (dmy) return new Date(+dmy[3], +dmy[2] - 1, +dmy[1]);
 
-  // “on the 5th / by 15th”
+  // “on/by 5th”
   const dom = t.match(/\b(?:on|by|due)\s*(?:the\s*)?(\d{1,2})(?:st|nd|rd|th)?\b/);
   if (dom) {
     const day = clamp(parseInt(dom[1], 10), 1, 31);
@@ -112,7 +113,7 @@ function parseDateish(utterance = "", now = new Date()) {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate() + add);
   }
 
-  // month name + day (“Dec 30 2025” or “December 30 2025” or without year)
+  // month name + day (with optional year)
   const md = t.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:\s+(\d{4}))?\b/i);
   if (md) {
     const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
@@ -139,7 +140,7 @@ function looksLikeDateContext(text="") {
   return false;
 }
 
-// Amount parsing for FREE TEXT (safe: won’t pick dates)
+// ---- Amount parsing for FREE TEXT (safe: won’t pick dates) ----
 function parseAmountFromFreeText(text = "") {
   const t = text.toLowerCase();
 
@@ -160,65 +161,106 @@ function parseAmountFromFreeText(text = "") {
   // If it looks like a date context, ignore bare numbers
   if (looksLikeDateContext(t)) return null;
 
-  // Otherwise, ignore bare numbers to avoid “30” from “Dec 30” being taken as amount.
   return null;
 }
 
-/* key:value style edits accepted at ANY step */
-function parseEdits(utterance = "", now = new Date()) {
+// ---- Name parsing helpers ----
+const NAME_KEYS = ["title","name","goal","goalname"];
+const TARGET_KEYS = ["target","amount","goalamount","targetamount"];
+const DEADLINE_KEYS = ["deadline","date","targetdate","duedate","by"];
+const PRIORITY_KEYS = ["priority","prio"];
+
+/**
+ * Flexible key:value parser.
+ * Accepts:
+ *   "key: value"  "key = value"  "key value"  (<= 3 spaces)
+ * Only if key is in a known key list to avoid grabbing whole sentences.
+ */
+function parseEditsFlexible(utterance = "", now = new Date()) {
   const out = {};
   if (!utterance) return out;
   const lines = utterance.replace(/\r/g, "").split("\n").map(l => l.trim()).filter(Boolean);
 
   for (const raw of lines) {
-    const m = raw.match(/^([a-z _-]+)\s*[:=]\s*(.+)$/i);
+    const m = raw.match(/^([a-z _-]+)\s*(?::|=|\s{1,3})\s*(.+)$/i);
     if (!m) continue;
     const key = m[1].toLowerCase().replace(/\s+/g, "");
     const val = m[2].trim();
 
-    if (["title","name","goal","goalname"].includes(key)) out.name = val;
+    if (NAME_KEYS.includes(key)) {
+      out.name = stripNameDecor(val);
+      continue;
+    }
 
-    if (["target","amount","goalamount","targetamount"].includes(key)) {
+    if (TARGET_KEYS.includes(key)) {
       const a = parseAmountLKRExplicit(val);
       if (a != null) out.targetAmountLKR = a;
+      continue;
     }
 
-    if (["deadline","date","targetdate","duedate","by"].includes(key)) {
+    if (DEADLINE_KEYS.includes(key)) {
       const d = parseDateish(val, now);
       if (d) out.deadlineISO = toISODateLocal(d);
+      continue;
     }
 
-    if (["priority","prio"].includes(key)) {
+    if (PRIORITY_KEYS.includes(key)) {
       const p = parsePrioritySmart(val);
       if (p) out.priority = p;
+      continue;
     }
   }
   return out;
 }
 
-/* free text sniffing (any order, sentence-style) */
-function parseFreeTextSmart(utterance = "", now = new Date()) {
-  const out = {};
+function stripNameDecor(s="") {
+  return String(s).replace(/^["'`]+|["'`]+$/g, "").trim();
+}
+
+/**
+ * Extract name from free text.
+ * - “title/name/goal is …”
+ * - “for/towards/about …”
+ * - “… saving goal …”
+ */
+function parseNameFromFreeText(utterance="") {
   const t = utterance || "";
-
-  // amount anywhere (SAFE)
-  const a = parseAmountFromFreeText(t);
-  if (a != null) out.targetAmountLKR = a;
-
-  // date anywhere
-  const d = parseDateish(t, now);
-  if (d) out.deadlineISO = toISODateLocal(d);
-
-  // priority anywhere
-  const p = parsePrioritySmart(t);
-  if (p) out.priority = p;
-
-  // name/title: after "for|towards|named|title is|goal is" or fragment after "saving goal"
   const titleA = t.match(/\b(?:title|name|goal)\s*(?:is|:)\s*([^,.;\n]{2,})/i);
   const titleB = t.match(/\b(?:for|towards|about|regarding)\s+([^,.;\n]{2,})/i);
   const titleC = t.match(/\b(?:saving\s*goal|savings?\s*goal|goal)\b\s*[:\-]?\s*([^,.;\n]{2,})/i);
   const chosen = (titleA?.[1] || titleB?.[1] || titleC?.[1] || "").trim();
-  if (chosen) out.name = chosen;
+  return stripNameDecor(chosen);
+}
+
+/* free text sniffing (any order, sentence-style) */
+function parseFreeTextSmart(utterance = "", now = new Date(), step = null) {
+  const out = {};
+  const t = utterance || "";
+
+  // amount (SAFE)
+  const a = parseAmountFromFreeText(t);
+  if (a != null) out.targetAmountLKR = a;
+
+  // date
+  const d = parseDateish(t, now);
+  if (d) out.deadlineISO = toISODateLocal(d);
+
+  // priority
+  const p = parsePrioritySmart(t);
+  if (p) out.priority = p;
+
+  // name
+  const nameFT = parseNameFromFreeText(t);
+  if (nameFT) out.name = nameFT;
+
+  // During the *name step*, plain text is the name (unless it looks like a pure edit for another field)
+  if (step === "name" && !out.name) {
+    // if it clearly starts with a different key, don't steal it
+    const looksLikeOtherKey = /^(target|amount|deadline|date|priority|prio)\b/i.test(t.trim());
+    if (!looksLikeOtherKey && !isYes(t) && !isNo(t)) {
+      out.name = stripNameDecor(t.trim());
+    }
+  }
 
   return out;
 }
@@ -254,7 +296,7 @@ function recap(slots) {
     `• Priority: ${slots.priority}`,
     "",
     "Reply **yes** to save, **no** to cancel, or send fixes like:",
-    "• `name: Europe Trip`  `target: 450,000`  `deadline: 2026-06-01`  `priority: high`",
+    "• `name new bike`  `target 450,000`  `deadline 2026-06-01`  `priority high`",
   ].join("\n");
 }
 
@@ -332,7 +374,7 @@ export async function handleAddSavingGoalIntent(userUtterance, rawUserId, res) {
         sseEnd(res); return true;
       } catch (e) {
         if (e?.code === 11000) { // unique name per user, if you enforce it
-          sse(res, "❌ A goal with that **name** already exists. Please change the name (e.g., `name: Europe Trip 2026`).");
+          sse(res, "❌ A goal with that **name** already exists. Please change the name (e.g., `name Europe Trip 2026`).");
           sseEnd(res); return true;
         }
         console.error("[saving-goal] create error", e);
@@ -346,8 +388,11 @@ export async function handleAddSavingGoalIntent(userUtterance, rawUserId, res) {
       sseEnd(res); return true;
     }
 
-    // inline corrections at confirm
-    const edits = { ...parseEdits(userUtterance, new Date()), ...parseFreeTextSmart(userUtterance, new Date()) };
+    // inline corrections at confirm (colonless supported)
+    const edits = {
+      ...parseEditsFlexible(userUtterance, new Date()),
+      ...parseFreeTextSmart(userUtterance, new Date(), /*step*/ null),
+    };
     const merged = { ...session.slots, ...edits };
     updateSavingGoalSession(userId, merged);
 
@@ -363,10 +408,9 @@ export async function handleAddSavingGoalIntent(userUtterance, rawUserId, res) {
     }
   }
 
-  // ---- Normal flow: parse and merge from any order text ----
-  const free = parseFreeTextSmart(userUtterance, new Date());
-  const keyed = parseEdits(userUtterance, new Date());
-
+  // ---- Normal flow: parse and merge from any-order text ----
+  const keyed = parseEditsFlexible(userUtterance, new Date());
+  const free = parseFreeTextSmart(userUtterance, new Date(), prevStep);
   const patch = { ...free, ...keyed };
 
   updateSavingGoalSession(userId, patch);

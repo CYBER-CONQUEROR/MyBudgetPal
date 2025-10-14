@@ -11,6 +11,7 @@ import {
   AccountBalanceWallet as WalletIcon,
   Person as PersonIcon,
 } from "@mui/icons-material";
+import ChatWidget from "../components/ChatWidget.jsx";
 import CloseIcon from "@mui/icons-material/Close";
 import BarChartIcon from "@mui/icons-material/BarChart";
 import api from "../api/api.js"; // axios instance (baseURL=/api, withCredentials:true)
@@ -58,7 +59,7 @@ export default function Layout() {
     if (!ok) return;
     try {
       await api.post("auth/logout"); // cookie cleared server-side
-    } catch (_) {}
+    } catch (_) { }
     localStorage.removeItem("mbp_user");
     navigate("/login");
   };
@@ -152,7 +153,7 @@ export default function Layout() {
             >
               <MenuIcon fontSize="small" />
             </button>
-            
+
           </div>
           {/* right: name + avatar */}
           <div className="flex items-center gap-3">
@@ -182,6 +183,8 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+      {/* floating chat widget */}
+      <ChatWidget />
     </div>
   );
 }

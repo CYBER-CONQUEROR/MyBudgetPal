@@ -1,7 +1,9 @@
 // server.js
+import dotenv from "dotenv";
+dotenv.config();
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
+
 import mongoose from "mongoose";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
@@ -16,8 +18,7 @@ import eventRoutes from "./eventExpenses/eventRoutes.js";
 import accountRoutes from "./AccountManagement/AccountRoutes.js";
 import savingRoutes from "./savingGoals/savingsRoutes.js";
 import authRoutes from "./userManagement/authRoutes.js";
-
-dotenv.config();
+import assistRouter from "./assist/index.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -116,7 +117,7 @@ app.use("/api/budget", budgetPlanRouter);
 app.use("/api/events", eventRoutes);
 app.use("/api/accounts", accountRoutes);
 app.use("/api/savings-goals", savingRoutes);
-
+app.use("/api/assist", assistRouter);
 // 404 fallback
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 

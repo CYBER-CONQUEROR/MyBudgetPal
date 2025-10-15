@@ -63,100 +63,399 @@ function makeReportFilename(prefix, ts = new Date()) {
   return `${prefix}_${ts.toISOString().replace(/[:T]/g, "-").slice(0, 15)}.pdf`;
 }
 
-function generateSavingsPDF({ goals, filters, logoUrl = "/reportLogo.png" }) {
+/* ---------- helper: load logo as DataURL ---------- */
+const loadImageDataURL = async (url) => {
+  try {
+    const res = await fetch(url, { cache: "no-store", mode: "cors" });
+    if (!res.ok) throw new Error("Logo fetch failed");
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.warn("Logo load failed; continuing without logo:", e);
+    return null;
+  }
+};
+
+/* ---------- helper: ensure room before drawing table/header ---------- */
+const ensureSpaceForTable = (
+  doc,
+  currentY,
+  {
+    margin = 40,
+    pageH = doc.internal.pageSize.getHeight(),
+    minRows = 4,      // keep at least this many rows with header
+    rowH = 18,        // ~ font 9 + padding + grid
+    headerH = 26,     // estimated header height
+    extra = 16,       // breathing space before table
+    onAddPage = () => {},
+  } = {}
+) => {
+  const need = headerH + minRows * rowH + extra;
+  if (currentY + need > pageH - margin) {
+    doc.addPage();
+    onAddPage();
+    return margin; // reset Y
+  }
+  return currentY;
+};
+
+/* ===================== Savings Goals PDF (PURPLE headers, styled) ===================== */
+async function generateSavingsPDF({
+  goals = [],
+  filters = {},
+  logoUrl = "/reportLogo.png",
+}) {
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+
+  // Layout & palette (match Commitments/Budget)
   const margin = 40;
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
+  const brand = { r: 79, g: 70, b: 229 };         // purple/indigo-600
+  const brandLight = { r: 241, g: 245, b: 255 };  // panel bg
+  const slateTxt = 40;
+  const TOTAL_PAGES_TOKEN = "{total_pages_count_string}";
 
-  // Header
-  let textX = margin;
-  try {
-    const img = new Image();
-    img.crossOrigin = "Anonymous";
-    img.src = logoUrl;
-    doc.addImage(img, "PNG", margin, margin - 4, 44, 44);
-    textX = margin + 56;
-  } catch {}
-  doc.setFont("helvetica", "bold").setFontSize(20).text("My Budget Pal", textX, margin + 12);
-  doc.setFont("helvetica", "normal").setFontSize(16).text("Savings Goals Report", textX, margin + 34);
+  // helpers
+  const fmtLKR = (n) =>
+    (Number(n) || 0).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  const moneyRs = (rupees) => `LKR ${fmtLKR(rupees)}`;
+  const humanDateTime = new Date().toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const buildFilename = (prefix, data) => {
+    const d = new Date();
+    const parts = [prefix || "Report"];
+    if (data?.status) parts.push(String(data.status).replace(/\s+/g, ""));
+    if (data?.priority) parts.push(String(data.priority).replace(/\s+/g, ""));
+    if (data?.q) parts.push("q");
+    parts.push(d.toISOString().replace(/[:T]/g, "-").slice(0, 15));
+    return parts.filter(Boolean).join("_") + ".pdf";
+  };
 
-  let y = margin + 70;
+  // Footer
+  const drawFooter = () => {
+    doc.setDrawColor(235).setLineWidth(1);
+    doc.line(margin, pageH - 40, pageW - margin, pageH - 40);
 
-  // Filters summary
-  doc.setFontSize(11);
-  doc.text(`Filter: Status=${filters.status}`, margin, y);
-  y += 16;
-  doc.text(`Priority=${filters.priority}`, margin, y);
-  y += 16;
-  doc.text(`Search="${filters.q}"`, margin, y);
-  y += 24;
+    doc.setFontSize(9).setTextColor(120);
+    doc.text(`Generated: ${humanDateTime}`, margin, pageH - 22);
 
-  // Overview
-  const totalTarget = goals.reduce((sum, g) => sum + (g.targetCents || 0), 0);
-  const totalSaved = goals.reduce((sum, g) => sum + (g.savedCents || 0), 0);
-  const completed = goals.filter((g) => g.completed).length;
-  const active = goals.length - completed;
-  doc.setFont("helvetica", "bold").setFontSize(13).text("Overview", margin, y);
-  y += 14;
-  doc.setFont("helvetica", "normal").setFontSize(11);
-  doc.text(`Total Goals: ${goals.length}`, margin, y); y += 14;
-  doc.text(`Active Goals: ${active}`, margin, y); y += 14;
-  doc.text(`Completed Goals: ${completed}`, margin, y); y += 24;
+    const pageStr = `Page ${doc.internal.getNumberOfPages()} of ${TOTAL_PAGES_TOKEN}`;
+    const pageX = pageW - margin - 120; // a bit left from edge (matches others)
+    doc.text(pageStr, pageX, pageH - 22, { align: "right" });
+
+    doc.setTextColor(slateTxt);
+  };
+
+  // Header (logo + brand + purple rule)
+  const logoSize = 46;
+  const headerY = margin;
+  const logoDataUrl = await loadImageDataURL(logoUrl);
+  if (logoDataUrl) {
+    try {
+      doc.addImage(logoDataUrl, "PNG", margin, headerY, logoSize, logoSize);
+    } catch {}
+  }
+  const headerTextX = margin + (logoDataUrl ? logoSize + 12 : 0);
+  doc.setFont("helvetica", "bold").setFontSize(22).setTextColor(slateTxt);
+  doc.text("My Budget Pal", headerTextX, headerY + 30);
+
+  const sepY = headerY + logoSize + 12;
+  doc.setDrawColor(brand.r, brand.g, brand.b).setLineWidth(2);
+  doc.line(margin, sepY, pageW - margin, sepY);
+
+  // Title
+  const titleY = sepY + 28;
+  doc.setFont("helvetica", "bold").setFontSize(20).setTextColor(slateTxt);
+  doc.text("Savings Goals Report", pageW / 2, titleY, { align: "center" });
+
+  // Filter panel
+  const filterLines = [
+    `Status  : ${filters?.status ?? "All"}`,
+    `Priority: ${filters?.priority ?? "All"}`,
+    ...(filters?.q ? [`Search : "${filters.q}"`] : []),
+  ];
+  const boxX = margin;
+  const boxY = titleY + 20;
+  const lineH = 14;
+  const boxH = Math.max(1, filterLines.length) * lineH + 16;
+  const boxW = pageW - margin * 2;
+
+  doc.setDrawColor(230).setFillColor(brandLight.r, brandLight.g, brandLight.b);
+  doc.roundedRect(boxX, boxY, boxW, boxH, 6, 6, "F");
+
+  doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(100);
+  let fy = boxY + 12;
+  filterLines.forEach((line) => {
+    doc.text(line, boxX + 10, fy + 10);
+    fy += lineH;
+  });
+  doc.setTextColor(slateTxt);
+
+  // watermark
+  doc.setFontSize(10).setTextColor(120);
+  doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, {
+    angle: 90,
+  });
+  doc.setTextColor(slateTxt);
+
+  // Overview (Summary-style)
+  let cursorY = boxY + boxH + 22;
+
+  const totalTargetRs = goals.reduce(
+    (sum, g) => sum + Number(g?.targetCents || 0) / 100,
+    0
+  );
+  const totalSavedRs = goals.reduce(
+    (sum, g) => sum + Number(g?.savedCents || 0) / 100,
+    0
+  );
+  const totalRemainRs = Math.max(0, totalTargetRs - totalSavedRs);
+  const completed = goals.filter((g) => !!g.completed).length;
+  const active = Math.max(0, goals.length - completed);
+
+  doc.setFont("helvetica", "bold").setFontSize(13);
+  doc.text("Overview", margin, cursorY);
+  cursorY += 10;
+  doc.setDrawColor(brand.r, brand.g, brand.b).setLineWidth(1.2);
+  doc.line(margin, cursorY, pageW - margin, cursorY);
+  cursorY += 14;
+
+  const overviewRows = [
+    ["Total Goals", String(goals.length)],
+    ["Active Goals", String(active)],
+    ["Completed Goals", String(completed)],
+    ["Total Target", moneyRs(totalTargetRs)],
+    ["Total Saved", moneyRs(totalSavedRs)],
+    ["Remaining", moneyRs(totalRemainRs)],
+  ];
+  doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(60);
+  const labelX = margin + 10;
+  const labelW = Math.max(...overviewRows.map(([l]) => doc.getTextWidth(l)));
+  const colonX = labelX + labelW + 6;
+  const valueAnchor = Math.min(pageW - margin - 40, colonX + 10 + 220);
+  const lineGap = 18;
+
+  overviewRows.forEach(([label, value]) => {
+    doc.text(label, labelX, cursorY);
+    doc.text(":", colonX, cursorY);
+    doc.text(value, valueAnchor, cursorY, { align: "right" });
+    cursorY += lineGap;
+  });
+
+  doc.setDrawColor(230).setLineWidth(1);
+  doc.line(margin, cursorY, pageW - margin, cursorY);
+  cursorY += 24;
+  doc.setTextColor(slateTxt);
+
+  // Common table styling (PURPLE HEADERS)
+  const tableCommon = {
+    theme: "grid",
+    margin: { left: margin, right: margin },
+    styles: {
+      fontSize: 9,
+      cellPadding: 4,
+      lineColor: [230, 230, 230],
+      lineWidth: 0.5,
+      textColor: [40, 40, 40],
+      valign: "middle",
+    },
+    headStyles: {
+      fillColor: [brand.r, brand.g, brand.b], // PURPLE header
+      textColor: [255, 255, 255],             // white text
+      fontStyle: "bold",
+      halign: "left",
+    },
+    alternateRowStyles: { fillColor: [247, 248, 250] },
+    didDrawPage: () => drawFooter(),
+  };
+
+  const reWatermark = () => {
+    doc.setFontSize(10).setTextColor(120);
+    doc.text("A system generated report by MyBudgetPal.com", 12, pageH / 2, {
+      angle: 90,
+    });
+    doc.setTextColor(slateTxt);
+  };
 
   // Each goal
   for (const g of goals) {
-    doc.setFont("helvetica", "bold").setFontSize(12).text(`Goal: ${g.name}`, margin, y);
-    y += 14;
-    doc.setFont("helvetica", "normal").setFontSize(10);
-    doc.text(`Target: ${LKR.format((g.targetCents||0)/100)}`, margin, y); y += 12;
-    doc.text(`Saved: ${LKR.format((g.savedCents||0)/100)}`, margin, y); y += 12;
-    doc.text(`Remaining: ${LKR.format(((g.targetCents||0)-(g.savedCents||0))/100)}`, margin, y); y += 12;
-    doc.text(`Priority: ${g.priority}`, margin, y); y += 12;
-    if (g.deadline) {
-      doc.text(`Deadline: ${new Date(g.deadline).toLocaleDateString()}`, margin, y);
-      y += 12;
-    }
-    doc.text(`Status: ${g.completed ? "Completed" : "Active"}`, margin, y);
-    y += 18;
+    // ensure space for the goal header block
+    cursorY = ensureSpaceForTable(doc, cursorY, {
+      margin,
+      pageH,
+      minRows: 0,
+      rowH: 0,
+      headerH: 0,
+      extra: 80,
+      onAddPage: () => {
+        drawFooter();
+        reWatermark();
+      },
+    });
 
-    // Ledger
-    const head = [["Date", "Type", "Amount", "Note"]];
-    const body = (g.ledger || []).map((e) => [
-      new Date(e.at).toLocaleDateString(),
-      e.kind,
-      LKR.format((e.amountCents||0)/100),
-      e.note || "",
-    ]);
-    if (body.length) {
-      autoTable(doc, {
-        startY: y,
-        head, body,
-        theme: "grid",
-        styles: { fontSize: 9, cellPadding: 3 },
-        headStyles: { fillColor: [242, 246, 252], textColor: 40 },
-        margin: { left: margin, right: margin },
+    // Goal title
+    doc.setFont("helvetica", "bold").setFontSize(12).setTextColor(slateTxt);
+    doc.text(`Goal: ${g?.name || "—"}`, margin, cursorY);
+    cursorY += 14;
+
+    // Goal mini-summary
+    const tRs = Number(g?.targetCents || 0) / 100;
+    const sRs = Number(g?.savedCents || 0) / 100;
+    const rRs = Math.max(0, tRs - sRs);
+    const goalRows = [
+      ["Target", moneyRs(tRs)],
+      ["Saved", moneyRs(sRs)],
+      ["Remaining", moneyRs(rRs)],
+      ["Priority", String(g?.priority ?? "—")],
+      ["Status", g?.completed ? "Completed" : "Active"],
+      ...(g?.deadline
+        ? [["Deadline", new Date(g.deadline).toLocaleDateString()]]
+        : []),
+    ];
+
+    doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(60);
+    const gLabelX = margin + 10;
+    const gLabelW = Math.max(...goalRows.map(([lbl]) => doc.getTextWidth(lbl)));
+    const gColonX = gLabelX + gLabelW + 6;
+    const gValueAnchor = Math.min(pageW - margin - 40, gColonX + 10 + 220);
+
+    goalRows.forEach(([label, value]) => {
+      doc.text(label, gLabelX, cursorY);
+      doc.text(":", gColonX, cursorY);
+      doc.text(String(value), gValueAnchor, cursorY, { align: "right" });
+      cursorY += 14;
+    });
+
+    // Ledger table (prevent orphan header)
+    const ledger = Array.isArray(g?.ledger) ? g.ledger : [];
+    if (ledger.length) {
+      cursorY = ensureSpaceForTable(doc, cursorY, {
+        margin,
+        pageH,
+        minRows: 4,
+        rowH: 18,
+        headerH: 26,
+        extra: 16,
+        onAddPage: () => {
+          drawFooter();
+          reWatermark();
+        },
       });
-      y = doc.lastAutoTable.finalY + 32;
+
+      const head = [["Date", "Type", "Amount", "Note"]];
+      const body = ledger.map((e) => [
+        e?.at ? new Date(e.at).toLocaleDateString() : "—",
+        e?.kind || "—",
+        moneyRs(Number(e?.amountCents || 0) / 100),
+        e?.note || "",
+      ]);
+
+      autoTable(doc, {
+        ...tableCommon,
+        startY: cursorY + 6,
+        head,
+        body,
+        columnStyles: {
+          2: { halign: "right" }, // Amount right
+        },
+      });
+      cursorY = (doc.lastAutoTable?.finalY || cursorY) + 24;
     } else {
-      doc.text("No ledger entries.", margin, y);
-      y += 20;
+      doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(100);
+      doc.text("No ledger entries.", margin, cursorY);
+      cursorY += 22;
+      doc.setTextColor(slateTxt);
     }
   }
 
-  // Totals
-  doc.setFont("helvetica", "bold").setFontSize(12);
-  doc.text(`Grand Total Target: ${LKR.format(totalTarget/100)}`, margin, y); y += 14;
-  doc.text(`Grand Total Saved: ${LKR.format(totalSaved/100)}`, margin, y); y += 30;
+  // Summary (grand totals)
+  cursorY = ensureSpaceForTable(doc, cursorY, {
+    margin,
+    pageH,
+    minRows: 0,
+    rowH: 0,
+    headerH: 0,
+    extra: 110,
+    onAddPage: () => {
+      drawFooter();
+      reWatermark();
+    },
+  });
+
+  doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(slateTxt);
+  doc.text("Summary", margin, cursorY);
+  cursorY += 10;
+  doc.setDrawColor(brand.r, brand.g, brand.b).setLineWidth(1.2);
+  doc.line(margin, cursorY, pageW - margin, cursorY);
+  cursorY += 14;
+
+  const summaryRows = [
+    ["Total Goals", String(goals.length)],
+    ["Active Goals", String(active)],
+    ["Completed Goals", String(completed)],
+    ["Grand Total Target", moneyRs(totalTargetRs)],
+    ["Grand Total Saved", moneyRs(totalSavedRs)],
+    ["Grand Remaining", moneyRs(totalRemainRs)],
+  ];
+
+  doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(60);
+  const sLabelX = margin + 10;
+  const sLabelW = Math.max(...summaryRows.map(([lbl]) => doc.getTextWidth(lbl)));
+  const sColonX = sLabelX + sLabelW + 6;
+  const sValueAnchor = Math.min(pageW - margin - 40, sColonX + 10 + 220);
+
+  summaryRows.forEach(([label, value]) => {
+    doc.text(label, sLabelX, cursorY);
+    doc.text(":", sColonX, cursorY);
+    doc.text(value, sValueAnchor, cursorY, { align: "right" });
+    cursorY += 18;
+  });
+
+  doc.setDrawColor(230).setLineWidth(1);
+  doc.line(margin, cursorY, pageW - margin, cursorY);
+  cursorY += 24;
 
   // Signature
-  doc.setFont("helvetica", "normal").setFontSize(12);
-  doc.text("Signature : ...........................................", margin, pageH - 60);
+  let sigY = pageH - 68;
+  if (sigY - cursorY < 40) {
+    doc.addPage();
+    drawFooter();
+    reWatermark();
+    sigY = pageH - 68;
+  }
+  doc.setFont("helvetica", "normal").setFontSize(12).setTextColor(slateTxt);
+  doc.text(
+    "Authorized Signature : ____________________________________",
+    margin,
+    sigY
+  );
 
-  const fn = makeReportFilename("SavingsReport");
+  // finalize total pages
+  if (typeof doc.putTotalPages === "function")
+    doc.putTotalPages(TOTAL_PAGES_TOKEN);
+
+  // save
+  const fn = buildFilename("SavingsReport", {
+    status: filters?.status,
+    priority: filters?.priority,
+    q: filters?.q,
+  });
   doc.save(fn);
 }
-
 /* ------------------------- UI atoms ------------------------- */
 function Field({ label, required, children, hint }) { /* unchanged */ 
   return (
@@ -1025,14 +1324,6 @@ function FundForm({ open, onClose, onSubmit, accounts, goal, mode = "fund" }) {
           )}
         </Field>
 
-        <Field label="Note">
-          <input
-            className="w-full rounded-xl border border-slate-300 px-3 py-2"
-            value={f.note}
-            onChange={(e) => setF({ ...f, note: e.target.value })}
-          />
-        </Field>
-
         {(insufficient || exceedsRemaining || exceedsGoalBalance) && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
             {insufficient && <div>Insufficient balance in selected account.</div>}
@@ -1092,7 +1383,14 @@ export default function SavingsGoalsPage() {
         Budget.getPlan(period).catch(() => null),
       ]);
       setAccounts(acc);
-      setGoals(list);
+
+      // ⬇️ prefix-only filter on goal name (case-insensitive) — keeps other logic intact
+      const query = (qDebounced || "").trim().toLowerCase();
+      const listPref = query
+        ? list.filter((g) => String(g?.name || "").toLowerCase().startsWith(query))
+        : list;
+      setGoals(listPref);
+
       setBudgetSavingsRupees(plan?.savings?.amount ?? null); // planOut returns rupees
     } catch (e) {
       setErr(e?.response?.data?.detail || e.message);

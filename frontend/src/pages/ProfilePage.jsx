@@ -214,127 +214,165 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-white to-slate-50 text-slate-900">
-      <div className="mx-8">
-        <div>
-          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">
-            Profile
-          </h1>
-          <p className="text-slate-600 mt-1">
-            Manage your account info and avatar.
-          </p>
+      <div className="max-w-4xl mx-auto px-6 py-8">
+        {/* Header Section */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-600">
+              Profile
+            </h1>
+            <p className="text-slate-600 mt-1">
+              Manage your account info and avatar.
+            </p>
+          </div>
+          
+          {/* Action Buttons - Moved to header */}
+          <div className="flex gap-3">
+            <button 
+              onClick={()=>navigate(-1)} 
+              className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-slate-700 hover:bg-slate-50 transition-colors font-medium"
+            >
+              Back
+            </button>
+            <button
+              onClick={logout}
+              className="rounded-xl bg-rose-600 px-5 py-2.5 text-white hover:bg-rose-700 transition-colors font-medium"
+            >
+              Log Out
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        {/* Avatar Section */}
+        <div className="flex items-center gap-6 mb-8">
           <div className="relative">
             <img
               src={avatarUrl}
               onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = DEFAULT_AVATAR; }}
               alt="avatar"
-              className="h-24 w-24 rounded-full object-cover border border-slate-200"
+              className="h-24 w-24 rounded-full object-cover border-2 border-slate-200 shadow-sm"
             />
-            <label className="absolute bottom-0 right-0 rounded-full bg-indigo-600 p-2 text-white shadow cursor-pointer">
+            <label className="absolute bottom-0 right-0 rounded-full bg-indigo-600 p-2 text-white shadow-lg cursor-pointer hover:bg-indigo-700 transition-colors">
               <CameraIcon fontSize="small" />
               <input type="file" accept="image/*" onChange={onPickAvatar} className="hidden" />
             </label>
           </div>
+          <div>
+            <h2 className="text-lg font-semibold text-slate-800">{user?.fullName || user?.name || "User"}</h2>
+            <p className="text-slate-600 text-sm">{user?.email || ""}</p>
+          </div>
         </div>
 
+        {/* Message Display */}
         {(msg || err) && (
-          <div className={`mt-4 rounded-xl border px-3 py-2 text-sm ${err ? "border-rose-200 bg-rose-50 text-rose-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
+          <div className={`mb-6 rounded-xl border px-4 py-3 text-sm ${err ? "border-rose-200 bg-rose-50 text-rose-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
             {err || msg}
           </div>
         )}
 
-        {/* Profile info */}
-        <form onSubmit={updateProfile} className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700">Full name</label>
-            <input
-              value={fullName}
-              onChange={onNameChange}
-              className={`mt-1 w-full rounded-xl border ${nameErr ? "border-rose-400" : "border-slate-300"} bg-white px-3 py-2`}
-              placeholder="John Doe"
-            />
-            {nameErr && <p className="mt-1 text-xs text-rose-600">{nameErr}</p>}
-          </div>
+        {/* Profile Info Section */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6">
+          <h2 className="text-xl font-semibold text-slate-800 mb-4">Personal Information</h2>
+          <form onSubmit={updateProfile} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Full name</label>
+              <input
+                value={fullName}
+                onChange={onNameChange}
+                className={`w-full rounded-xl border ${nameErr ? "border-rose-400 bg-rose-50" : "border-slate-300"} bg-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent`}
+                placeholder="John Doe"
+              />
+              {nameErr && <p className="mt-2 text-xs text-rose-600">{nameErr}</p>}
+            </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={onEmailChange}
-              className={`mt-1 w-full rounded-xl border ${emailErr ? "border-rose-400" : "border-slate-300"} bg-white px-3 py-2`}
-              placeholder="you@example.com"
-              inputMode="email"
-              autoComplete="email"
-            />
-            {emailErr && <p className="mt-1 text-xs text-rose-600">{emailErr}</p>}
-          </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={onEmailChange}
+                className={`w-full rounded-xl border ${emailErr ? "border-rose-400 bg-rose-50" : "border-slate-300"} bg-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent`}
+                placeholder="you@example.com"
+                inputMode="email"
+                autoComplete="email"
+              />
+              {emailErr && <p className="mt-2 text-xs text-rose-600">{emailErr}</p>}
+            </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700">Phone</label>
-            <input
-              value={phone}
-              onChange={onPhoneChange}
-              onKeyDown={onPhoneKeyDown}
-              className={`mt-1 w-full rounded-xl border ${phoneErr ? "border-rose-400" : "border-slate-300"} bg-white px-3 py-2`}
-              placeholder="0712345678"
-              type="tel"
-              inputMode="numeric"
-              pattern="^0\d{9}$"
-              maxLength={10}
-            />
-            <p className={`text-xs mt-1 ${phoneErr ? "text-rose-600" : "text-slate-500"}`}>
-              Must be exactly 10 digits and start with 0.
-            </p>
-          </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-2">Phone</label>
+              <input
+                value={phone}
+                onChange={onPhoneChange}
+                onKeyDown={onPhoneKeyDown}
+                className={`w-full rounded-xl border ${phoneErr ? "border-rose-400 bg-rose-50" : "border-slate-300"} bg-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent`}
+                placeholder="0712345678"
+                type="tel"
+                inputMode="numeric"
+                pattern="^0\d{9}$"
+                maxLength={10}
+              />
+              <p className={`text-xs mt-2 ${phoneErr ? "text-rose-600" : "text-slate-500"}`}>
+                Must be exactly 10 digits and start with 0.
+              </p>
+            </div>
 
-          <div className="md:col-span-2 flex justify-end">
-            <button
-              type="submit"
-              disabled={saving || !formValid}
-              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-70"
-              title={!formValid ? "Fix validation errors to save" : "Save profile"}
-            >
-              <SaveIcon fontSize="small" /> {saving ? "Saving..." : "Save Profile"}
-            </button>
-          </div>
-        </form>
+            <div className="md:col-span-2 flex justify-end pt-4">
+              <button
+                type="submit"
+                disabled={saving || !formValid}
+                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-6 py-3 text-white hover:bg-indigo-700 disabled:opacity-70 transition-colors font-medium"
+                title={!formValid ? "Fix validation errors to save" : "Save profile"}
+              >
+                <SaveIcon fontSize="small" /> {saving ? "Saving..." : "Save Profile"}
+              </button>
+            </div>
+          </form>
+        </div>
 
-        {/* Password */}
-        <form onSubmit={changePassword} className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700">Current password</label>
-            <input type="password" value={currentPassword} onChange={(e)=>setCurrentPassword(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700">New password</label>
-            <input type="password" value={newPassword} onChange={(e)=>setNewPassword(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2" />
-            <p className="text-xs text-slate-500 mt-1">8–12 characters</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700">Confirm</label>
-            <input type="password" value={confirm} onChange={(e)=>setConfirm(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2" />
-          </div>
-          <div className="md:col-span-3 flex justify-end">
-            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-white hover:bg-slate-900 disabled:opacity-70">
-              Change Password
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div className="mt-6 flex justify-between mx-8">
-        <button onClick={()=>navigate(-1)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 hover:bg-slate-50">
-          Back
-        </button>
-        <button
-          onClick={logout}
-          className="rounded-xl bg-rose-600 px-4 py-2 text-white hover:bg-rose-700"
-        >
-          Log Out
-        </button>
+        {/* Password Section */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <h2 className="text-xl font-semibold text-slate-800 mb-4">Change Password</h2>
+          <form onSubmit={changePassword} className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Current password</label>
+              <input 
+                type="password" 
+                value={currentPassword} 
+                onChange={(e)=>setCurrentPassword(e.target.value)} 
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent" 
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">New password</label>
+              <input 
+                type="password" 
+                value={newPassword} 
+                onChange={(e)=>setNewPassword(e.target.value)} 
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent" 
+              />
+              <p className="text-xs text-slate-500 mt-2">8–12 characters</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Confirm</label>
+              <input 
+                type="password" 
+                value={confirm} 
+                onChange={(e)=>setConfirm(e.target.value)} 
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent" 
+              />
+            </div>
+            <div className="md:col-span-3 flex justify-end pt-4">
+              <button 
+                type="submit" 
+                disabled={saving} 
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-800 px-6 py-3 text-white hover:bg-slate-900 disabled:opacity-70 transition-colors font-medium"
+              >
+                Change Password
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );

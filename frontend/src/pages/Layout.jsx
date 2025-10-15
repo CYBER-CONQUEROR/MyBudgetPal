@@ -11,6 +11,7 @@ import {
   AccountBalanceWallet as WalletIcon,
   Person as PersonIcon,
 } from "@mui/icons-material";
+import ChatWidget from "../components/ChatWidget.jsx";
 import CloseIcon from "@mui/icons-material/Close";
 import BarChartIcon from "@mui/icons-material/BarChart";
 import api from "../api/api.js";
@@ -76,8 +77,8 @@ export default function Layout() {
     const ok = window.confirm("Log out of MY BUDGET PAL?");
     if (!ok) return;
     try {
-      await api.post("auth/logout");
-    } catch (_) {}
+      await api.post("auth/logout"); // cookie cleared server-side
+    } catch (_) { }
     localStorage.removeItem("mbp_user");
     navigate("/login");
   };
@@ -306,6 +307,8 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+      {/* floating chat widget */}
+      <ChatWidget />
     </div>
   );
 }

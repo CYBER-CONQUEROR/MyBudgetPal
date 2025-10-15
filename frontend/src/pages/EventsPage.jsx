@@ -518,8 +518,8 @@ function Bar({ value = 0, max = 0, hard = false }) {
   // choose fill color
   const fill =
     over ? "from-rose-500 to-rose-400"
-    : warn ? "from-amber-500 to-amber-400"
-    : "from-emerald-500 to-emerald-400";
+      : warn ? "from-amber-500 to-amber-400"
+        : "from-emerald-500 to-emerald-400";
 
   return (
     <div
@@ -1621,6 +1621,12 @@ function EventCard({ ev, onEdit, onFund, onDefund, onSpend, onDelete }) {
         {/* Row 3: Delete button (only when no money spent and no funds) */}
         {canDelete && (
           <button
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border ${ev.fundedCents > 0
+              ? "border-slate-300 text-slate-400 cursor-not-allowed"
+              : "border-red-300 text-red-600 hover:bg-red-50"
+              }`}
+            onClick={() => (ev.fundedCents > 0 ? null : onDelete(ev))}
+            disabled={ev.fundedCents > 0}
             className="col-span-2 flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl border border-red-300 text-red-600 hover:bg-red-50 text-sm mt-1"
             onClick={() => onDelete(ev)}
           >
@@ -1861,6 +1867,7 @@ export default function EventsPage() {
               Refresh
             </button>
             <button
+
               onClick={() =>
                 generateEventExpensesReportPDF({
                   rows: filtered,
@@ -2026,88 +2033,148 @@ export default function EventsPage() {
 
         {/* Table - Made horizontally scrollable */}
         <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-full">
-              <thead className="bg-slate-200 text-slate-900">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-200 text-slate-900">
+              <tr>
+                <th className="px-3 py-2 text-left">Title</th>
+                <th className="px-3 py-2 text-left">Mode</th>
+                <th className="px-3 py-2 text-left">Account</th>
+                <th className="px-3 py-2 text-right">Target</th>
+                <th className="px-3 py-2 text-right">Funded</th>
+                <th className="px-3 py-2 text-right">Spent</th>
+                <th className="px-3 py-2 text-left">Created</th>
+                <th className="px-3 py-2 text-left">Due</th>
+                <th className="px-3 py-2 text-right min-w-[200px] whitespace-nowrap">Actions</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filtered.length === 0 ? (
                 <tr>
-                  <th className="px-3 py-2 text-left">Title</th>
-                  <th className="px-3 py-2 text-left">Mode</th>
-                  <th className="px-3 py-2 text-left">Account</th>
-                  <th className="px-3 py-2 text-right">Target</th>
-                  <th className="px-3 py-2 text-right">Funded</th>
-                  <th className="px-3 py-2 text-right">Spent</th>
-                  <th className="px-3 py-2 text-left">Due</th>
-                  <th className="px-3 py-2 text-right">Actions</th>
+                  <td
+                    colSpan={9}
+                    className="px-3 py-6 text-center text-slate-500 italic"
+                  >
+                    No events
+                  </td>
                 </tr>
-              </thead>
+              ) : (
+                filtered.map((e) => {
+                  const hasSpend = (e.spentCents || 0) > 0;
+                  const refundable =
+                    Math.max(0, (e.fundedCents || 0) - (e.spentCents || 0)) > 0;
+                  const canDelete = !hasSpend && (e.fundedCents || 0) === 0;
 
-              <tbody>
-                {filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-slate-500 italic">
-                      No events
-                    </td>
-                  </tr>
-                ) : (
-                  filtered.map((e) => {
-                    const hasSpend = (e.spentCents || 0) > 0;
-                    const refundable = Math.max(0, (e.fundedCents || 0) - (e.spentCents || 0)) > 0;
-                    const canDelete = !hasSpend && (e.fundedCents || 0) === 0;
+                  const accountName =
+                    accounts.find((a) => a._id === e.primaryAccountId)?.name || "—";
+                  const modePill =
+                    e.mode === "single"
+                      ? "bg-slate-100 text-slate-700"
+                      : "bg-indigo-50 text-indigo-700";
 
-                    const accountName = accounts.find((a) => a._id === e.primaryAccountId)?.name || "—";
-                    const modePill =
-                      e.mode === "single"
-                        ? "bg-slate-100 text-slate-700"
-                        : "bg-indigo-50 text-indigo-700";
+                  return (
+                    <tr
+                      key={e._id}
+                      className="border-t hover:bg-slate-50 transition-colors"
+                    >
+                      <td className="px-3 py-2 align-middle font-medium text-slate-800">
+                        {e.title}
+                      </td>
 
-                    return (
-                      <tr
-                        key={e._id}
-                        className="border-t hover:bg-slate-50 transition-colors"
-                      >
-                        <td className="px-3 py-2 font-medium text-slate-800">{e.title}</td>
+                      <td className="px-3 py-2 align-middle">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs ${modePill}`}
+                        >
+                          {e.mode === "single" ? "Single" : "Itemized"}
+                        </span>
+                      </td>
 
-                        <td className="px-3 py-2">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs ${modePill}`}>
-                            {e.mode === "single" ? "Single" : "Itemized"}
+                      <td className="px-3 py-2 align-middle">{accountName}</td>
+
+                      <td className="px-3 py-2 align-middle text-right font-semibold">
+                        {currency(e.targetCents, e.currency || "LKR")}
+                      </td>
+
+                      <td className="px-3 py-2 align-middle text-right">
+                        {currency(e.fundedCents, e.currency || "LKR")}
+                      </td>
+
+                      <td className="px-3 py-2 align-middle text-right">
+                        {currency(e.spentCents, e.currency || "LKR")}
+                      </td>
+
+                      <td className="px-3 py-2 align-middle">
+                        {e?.createdAt ? (
+                          <span className="inline-flex items-center gap-1">
+                            <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+                            {new Date(e.createdAt).toLocaleDateString()}
                           </span>
-                        </td>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
 
-                        <td className="px-3 py-2">{accountName}</td>
+                      <td className="px-3 py-2 align-middle">
+                        {e?.dates?.due ? (
+                          <span className="inline-flex items-center gap-1">
+                            <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
+                            {new Date(e.dates.due).toLocaleDateString()}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
 
-                        <td className="px-3 py-2 text-right font-semibold">
-                          {currency(e.targetCents, e.currency || "LKR")}
-                        </td>
+                      {/* Actions (icon-only) */}
+                      <td className="px-3 py-2 align-middle text-right whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-3">
+                          <button
+                            className="text-blue-600 hover:text-blue-800"
+                            onClick={() => {
+                              setEditing(e);
+                              setOpen(true);
+                            }}
+                            title="Edit"
+                          >
+                            <Pencil className="w-5 h-5" />
+                          </button>
 
-                        <td className="px-3 py-2 text-right">
-                          {currency(e.fundedCents, e.currency || "LKR")}
-                        </td>
+                          <button
+                            className="text-emerald-600 hover:text-emerald-800"
+                            onClick={() => setFunding(e)}
+                            title="Fund"
+                          >
+                            <PlusCircle className="w-5 h-5" />
+                          </button>
 
-                        <td className="px-3 py-2 text-right">
-                          {currency(e.spentCents, e.currency || "LKR")}
-                        </td>
-
-                        <td className="px-3 py-2">
-                          {e?.dates?.due ? (
-                            <span className="inline-flex items-center gap-1">
-                              <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
-                              {new Date(e.dates.due).toLocaleDateString()}
-                            </span>
-                          ) : "—"}
-                        </td>
-
-                        <td className="px-3 py-2">
-                          <div className="flex justify-end gap-2">
+                          {refundable && (
                             <button
-                              className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-800"
-                              onClick={() => { setEditing(e); setOpen(true); }}
-                              title="Edit"
+                              className="text-amber-600 hover:text-amber-800"
+                              onClick={() => setDefunding(e)}
+                              title="Remove funds"
                             >
-                              <Pencil className="w-4 h-4" />
-                              <span className="hidden sm:inline">Edit</span>
+                              <MinusCircle className="w-5 h-5" />
                             </button>
 
                             <button
+                              className={[
+                                canDelete
+                                  ? "text-red-600 hover:text-red-800"
+                                  : "text-slate-400 cursor-not-allowed",
+                              ].join(" ")}
+                              onClick={() =>
+                                canDelete ? onDeleteEvent(e) : null
+                              }
+                              disabled={!canDelete}
+                              title={
+                                canDelete
+                                  ? "Delete"
+                                  : e.fundedCents > 0
+                                    ? "Remove funds first to delete"
+                                    : ""
+                              }
+                            >
+                              <Trash2 className="w-5 h-5" />
                               className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-800"
                               onClick={() => setFunding(e)}
                               title="Fund"
@@ -2153,6 +2220,7 @@ export default function EventsPage() {
             </table>
           </div>
         </div>
+
 
         {/* Modals */}
         <EventForm

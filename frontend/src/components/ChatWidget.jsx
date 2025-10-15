@@ -12,7 +12,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import api from "../api/api.js";
 
 function apiBase() {
-  const base = api.defaults.baseURL || "";
+  const base = api?.defaults?.baseURL || "";
   return base.replace(/\/$/, "");
 }
 function userIdHeader() {
@@ -22,6 +22,17 @@ function userIdHeader() {
     return u?._id ? { "x-user-id": u._id } : {};
   } catch {
     return {};
+  }
+}
+
+/** Keep newlines; collapse only 3+ into 2; normalize CRLF */
+function sanitizeStream(s) {
+  try {
+    return String(s ?? "")
+      .replace(/\r/g, "")
+      .replace(/\n{4,}/g, "\n\n"); // keep intentional blank lines
+  } catch {
+    return s || "";
   }
 }
 
@@ -65,45 +76,44 @@ export default function ChatWidget() {
 
   const canSend = input.trim().length > 0 && !streaming && !thinking && !speaking;
 
-  /** ---------- SSE reader (robust) ---------- */
+  /** ---------- SSE reader (robust; preserves newlines inside one event) ---------- */
   async function readSSEStream(body, onEvent) {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
     let eventBuf = "";
 
+    const flushEvent = () => {
+      if (!eventBuf) return;
+      // deliver exactly what the server sent for this event (no extra newline)
+      const payload = eventBuf.endsWith("\n") ? eventBuf.slice(0, -1) : eventBuf;
+      onEvent(payload);
+      eventBuf = "";
+    };
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-
       buf += decoder.decode(value, { stream: true });
 
-      // Consume complete lines
       let idx;
       while ((idx = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
 
-        // SSE framing:
-        // "data: ..." lines belong to the payload
-        // blank line => end of one event
-        if (line.startsWith("data: ")) {
-          eventBuf += line.slice(6) + "\n";
+        if (line.startsWith("data:")) {
+          eventBuf += line.slice(5);      // preserve leading spaces!
+          eventBuf += "\n";
         } else if (line.trim() === "") {
-          if (eventBuf.length) {
-            // Complete one event payload (preserve all newlines)
-            onEvent(eventBuf.replace(/\n$/, ""));
-            eventBuf = "";
-          }
+          // blank line => end of one event
+          flushEvent();
         } else {
-          // Our server sometimes embeds raw newlines inside the single 'data:' write.
-          // Treat unprefixed lines as part of the payload.
+          // tolerate stray lines by treating them as part of data
           eventBuf += line + "\n";
         }
       }
     }
-    // Flush any trailing payload
-    if (eventBuf.length) onEvent(eventBuf.replace(/\n$/, ""));
+    flushEvent();
   }
 
   /** ---------- STREAM CHAT (SSE) ---------- */
@@ -117,7 +127,11 @@ export default function ChatWidget() {
     try {
       res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...userIdHeader() },
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream",
+          ...userIdHeader(),
+        },
         credentials: "include",
         body: JSON.stringify({ messages: history }),
         signal: controller.signal,
@@ -145,8 +159,9 @@ export default function ChatWidget() {
 
     try {
       await readSSEStream(res.body, (payload) => {
-        // Accumulate multiple events with a blank line between them
-        acc = acc ? acc + "\n\n" + payload : payload;
+        // *** KEY FIX: concatenate deltas directly; DO NOT insert "\n\n" between events ***
+        acc += payload;
+
         setMsgs((prev) => {
           const copy = [...prev];
           copy[copy.length - 1] = {
@@ -176,7 +191,7 @@ export default function ChatWidget() {
   };
 
   const stopStream = () => {
-    try { abortRef.current?.abort(); } catch {}
+    try { abortRef.current?.abort(); } catch { }
     abortRef.current = null;
     setStreaming(false);
   };
@@ -197,9 +212,12 @@ export default function ChatWidget() {
   };
 
   /** ---------- TTS ---------- */
-  const speak = async (text) => {
+  /** ---------- TTS (faster playback) ---------- */
+  const speak = async (text, rate = 1.5) => {
     try {
       setSpeaking(true);
+
+      // fetch TTS audio (unchanged)
       const res = await fetch(`${apiBase()}/assist/speech/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...userIdHeader() },
@@ -207,20 +225,31 @@ export default function ChatWidget() {
         body: JSON.stringify({ text }),
       });
       if (!res.ok) throw new Error("TTS failed");
+
       const buf = await res.arrayBuffer();
       const blob = new Blob([buf], { type: "audio/mpeg" });
       const url = URL.createObjectURL(blob);
+
       const el = audioRef.current;
       el.src = url;
+
+      // 🔊 make it faster
+      el.playbackRate = rate;           // 1.0 = normal, try 1.35–1.6
+      // keep voice natural (avoid chipmunk effect)
+      if ("preservesPitch" in el) el.preservesPitch = true;
+      if ("mozPreservesPitch" in el) el.mozPreservesPitch = true;
+      if ("webkitPreservesPitch" in el) el.webkitPreservesPitch = true;
+
       await el.play();
       await new Promise((resolve) => {
         const onEnd = () => { el.removeEventListener("ended", onEnd); resolve(); };
-        el.addEventListener("ended", onEnd);
+        el.addEventListener("ended", onEnd, { once: true });
       });
     } finally {
       setSpeaking(false);
     }
   };
+
 
   /** ---------- BASIC VAD RECORD ---------- */
   const recordUntilSilence = async ({
@@ -327,18 +356,18 @@ export default function ChatWidget() {
   };
 
   const bargeIn = () => {
-    try { audioRef.current?.pause(); audioRef.current.currentTime = 0; } catch {}
+    try { audioRef.current?.pause(); audioRef.current.currentTime = 0; } catch { }
     if (recording) setRecording(false);
     stopStream();
   };
 
   const stopEverything = () => {
-    try { audioRef.current?.pause(); } catch {}
+    try { audioRef.current?.pause(); } catch { }
     setSpeaking(false);
     stopStream();
     if (vadRAFRef.current) cancelAnimationFrame(vadRAFRef.current);
     vadRAFRef.current = 0;
-    try { mediaRecRef.current?.stop(); } catch {}
+    try { mediaRecRef.current?.stop(); } catch { }
     setRecording(false);
   };
 
@@ -533,15 +562,4 @@ function Bubble({ role, text }) {
       )}
     </div>
   );
-}
-
-/** Keep newlines; collapse only 3+ into 2; normalize CRLF */
-function sanitizeStream(s) {
-  try {
-    return String(s ?? "")
-      .replace(/\r/g, "")
-      .replace(/\n{4,}/g, "\n\n"); // keep intentional blank lines
-  } catch {
-    return s || "";
-  }
 }

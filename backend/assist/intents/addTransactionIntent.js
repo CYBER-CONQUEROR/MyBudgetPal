@@ -341,27 +341,19 @@ function parseCommaList(utterance, categories, accounts) {
   for (const p of parts) {
     const low = p.toLowerCase();
 
+    // amount anywhere in the chunk
     const amount = parseAmountLKR(p);
     if (amount && out.amountLKR == null) { out.amountLKR = amount; continue; }
 
+    // date
     const d = parseDate(p);
     if (d && !out.dateISO) { out.dateISO = d; continue; }
 
-    const catDirect = categories?.find(c => c.name.toLowerCase() === low) ||
-                      categories?.find(c => low.includes(c.name.toLowerCase()));
-    if (catDirect && !out.categoryName) { out.categoryName = catDirect.name; continue; }
-    if (!out.categoryName) {
-      const hintCat = bestCategory(categories, p);
-      if (hintCat) { out.categoryName = hintCat.name; continue; }
-    }
-
-    const { match } = resolveAccountFromText(accounts || [], p);
-    if (match && !out.accountId) { out.accountId = String(match._id); out.accountName = match.name; continue; }
-
-    const m = p.match(/^([a-z _-]+)\s*[:=]\s*(.+)$/i);
-    if (m) {
-      const key = m[1].toLowerCase().replace(/\s+/g, "");
-      const value = m[2].trim();
+    // explicit key:value pairs
+    const kv = p.match(/^([a-z _-]+)\s*[:=]\s*(.+)$/i);
+    if (kv) {
+      const key = kv[1].toLowerCase().replace(/\s+/g, "");
+      const value = kv[2].trim();
       if (key === "amount") out.amountLKR = Number(value.replace(/,/g, ""));
       if (key === "category") out.categoryName = value;
       if (key === "account") {
@@ -374,12 +366,34 @@ function parseCommaList(utterance, categories, accounts) {
       continue;
     }
 
+    // NEW: loose "title xyz" (no colon) inside comma chunks
+    const looseTitle = p.match(/^\s*title\b[\s\-–—]*\s*(.{1,80})$/i);
+    if (looseTitle && !out.title) {
+      out.title = cleanTitle(looseTitle[1]);
+      continue;
+    }
+
+    // category guess
+    const catDirect = categories?.find(c => c.name.toLowerCase() === low) ||
+                      categories?.find(c => low.includes(c.name.toLowerCase()));
+    if (catDirect && !out.categoryName) { out.categoryName = catDirect.name; continue; }
+    if (!out.categoryName) {
+      const hintCat = bestCategory(categories, p);
+      if (hintCat) { out.categoryName = hintCat.name; continue; }
+    }
+
+    // account guess
+    const { match } = resolveAccountFromText(accounts || [], p);
+    if (match && !out.accountId) { out.accountId = String(match._id); out.accountName = match.name; continue; }
+
+    // fallback: title if it looks like a clean title
     if (!out.title && !isIntentLike(p) && isLikelyTitle(p, categories, accounts)) {
       out.title = cleanTitle(p);
     }
   }
   return out;
 }
+
 
 function parseBulkFields(utterance, categories, accounts) {
   const out = {};
@@ -409,9 +423,19 @@ function parseBulkFields(utterance, categories, accounts) {
 function parseCorrections(u, categories, accounts) {
   const edits = parseBulkFields(u, categories, accounts);
 
-  const mTitle = u.match(/\btitle\s*(?:is|=|to)\s*(.{2,80})/i);
-  if (mTitle) edits.title = cleanTitle(mTitle[1]);
+  // --- Title corrections ---
+  // Strict pattern first (works for: "title: KFC", "title is KFC", "title = KFC", "title to KFC")
+  let mTitle = u.match(/\btitle\s*(?:is|=|to|:)\s*(.{1,80})/i);
+  if (mTitle && !edits.title) {
+    edits.title = cleanTitle(mTitle[1]);
+  }
+  // Loose pattern: "title KFC" (no colon), stop at comma/newline
+  if (!edits.title) {
+    const mLoose = u.match(/\btitle\b[\s\-–—]*\s*([^,\n]{1,80})/i);
+    if (mLoose) edits.title = cleanTitle(mLoose[1]);
+  }
 
+  // --- Account corrections (existing) ---
   const mAcc = u.match(/\b(?:account|acc)\s*(?:name)?\s*(?:is|=)\s*([a-z0-9 '&\-]{1,60})/i);
   if (mAcc && !edits.accountId) {
     const val = mAcc[1].trim();
@@ -422,22 +446,34 @@ function parseCorrections(u, categories, accounts) {
       if (match) { edits.accountId = String(match._id); edits.accountName = match.name; }
     }
   }
-
-  // also support bare "account is 2" / "account: 3"
   const mAccNum = u.match(/\b(?:account|acc)\s*(?:name)?\s*(?:is|:|=)\s*(\d{1,2})\b/i);
   if (mAccNum && !edits.accountId) edits.__accountPickIndex = Number(mAccNum[1]);
 
+  // Category correction (existing)
   const mCat = u.match(/\bcategory\s*(?:is|=)\s*([a-z0-9 '&\-]{2,60})/i);
   if (mCat && !edits.categoryName) edits.categoryName = mCat[1].trim();
 
-  const mAmt = u.match(/\bamount\s*(?:is|=)\s*([\d]+(?:\.\d{1,2})?)(?:\s*\/-)?\b/i);
-  if (mAmt && !edits.amountLKR) edits.amountLKR = Number(mAmt[1]);
+  // --- SMART AMOUNT CORRECTIONS (existing + works for "Amount 1500") ---
+  const mAmtPhrase = u.match(/\b(?:set|change|update|make)?\s*(?:amount|amt)\s*(?:to|=|is|:)?\s*([\d.,]+(?:\s*k)?)(?:\s*\/-)?\b/i);
+  if (mAmtPhrase && !edits.amountLKR) {
+    const raw = mAmtPhrase[1].replace(/,/g, "").trim();
+    edits.amountLKR = /k$/i.test(raw) ? Number(raw.replace(/k$/i, "")) * 1000 : Number(raw);
+  }
+  if (edits.amountLKR == null) {
+    const maybe = parseAmountLKR(u);
+    const looksLikeAccountPick = /\b(acc|account)\b/i.test(u) && /^\s*\d{1,2}\s*$/.test(u.trim());
+    if (maybe != null && !looksLikeAccountPick) {
+      edits.amountLKR = maybe;
+    }
+  }
 
+  // Date correction (existing)
   const mDate = u.match(/\bdate\s*(?:is|=)\s*([0-9\-\/]+)\b/i);
   if (mDate && !edits.dateISO) edits.dateISO = parseDate(mDate[1]) || edits.dateISO;
 
   return edits;
 }
+
 
 function parseFreeText(utterance, categories, accounts) {
   const out = {};
@@ -726,7 +762,7 @@ export async function handleAddTransactionIntent(userUtterance, userId, res) {
       return sseEnd(res), true;
     }
 
-    // Edits at confirm (supports: “account is 2”, “account is hnb savings”, etc.)
+    // Edits at confirm (supports account quick-pick AND amount changes)
     let edits = parseCorrections(userUtterance, categories, accounts);
 
     // numeric quick-pick even if they didn't say "account:"

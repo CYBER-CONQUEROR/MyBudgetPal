@@ -1,114 +1,132 @@
 // assist/services/chatStream.js
 /**
- * Robust SSE streamer for OpenAI Responses API.
- * - Uses /v1/responses with stream:true
- * - Parses "event:" + "data:" frames and forwards only output_text deltas
- * - Ends cleanly on "response.completed"
+ * Robust SSE bridge for OpenAI Responses API.
+ * - Calls /v1/responses with stream:true
+ * - Parses upstream SSE (event:/data:)
+ * - Forwards ONLY text deltas (preserving spaces and real newlines)
+ * - Closes cleanly on response.completed / response.error
  */
 
 export async function streamChat({ messages, model = "gpt-4.1-mini", system }, res) {
-  // 1) Prepare SSE to the client
+  // 1) Prepare SSE to the browser
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
 
-  // 2) Build request payload for OpenAI Responses API
-  const inputBlocks = [];
-  if (system) {
-    inputBlocks.push({ role: "system", content: system });
-  }
-  for (const m of messages) {
-    inputBlocks.push({ role: m.role, content: m.content });
+  // 2) Build input blocks
+  const input = [];
+  if (system) input.push({ role: "system", content: system });
+  for (const m of Array.isArray(messages) ? messages : []) {
+    input.push({ role: m.role, content: m.content });
   }
 
-  // 3) Call OpenAI
-  let r;
+  // 3) Upstream request
+  if (!process.env.OPENAI_API_KEY) {
+    res.write("data: Missing OPENAI_API_KEY\n\n");
+    return res.end();
+  }
+
+  let upstream;
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      throw new Error("Missing OPENAI_API_KEY");
-    }
-    r = await fetch("https://api.openai.com/v1/responses", {
+    upstream = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        input: inputBlocks,
-        stream: true,
-      }),
+      body: JSON.stringify({ model, input, stream: true }),
     });
   } catch (err) {
-    console.error("[streamChat] fetch error ->", err?.message || err);
-    res.write(`data: OpenAI request failed.\n\n`);
+    res.write("data: OpenAI request failed\n\n");
     return res.end();
   }
 
-  if (!r.ok || !r.body) {
-    const text = await r.text().catch(() => "");
-    console.error("[streamChat] OpenAI bad status:", r.status, text);
-    res.write(`data: OpenAI returned ${r.status}. ${text.slice(0, 300)}\n\n`);
+  if (!upstream.ok || !upstream.body) {
+    const detail = await upstream.text().catch(() => "");
+    res.write(`data: Upstream error: ${String(detail || upstream.status)}\n\n`);
     return res.end();
   }
 
-  // 4) Parse OpenAI SSE frames
-  const reader = r.body.getReader();
+  // 4) Parse upstream SSE properly
+  const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
 
-  let buffer = "";
-  let currentEvent = "";
-  let ended = false;
+  let buf = "";
+  let curEvent = "";
+  let dataLines = [];
+  let finished = false;
 
-  const flushLines = () => {
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? ""; // keep incomplete line
-
-    for (const line of lines) {
-      if (!line) continue;
-      if (line.startsWith("event:")) {
-        currentEvent = line.slice(6).trim();
-        continue;
-      }
-      if (!line.startsWith("data:")) continue;
-
-      const jsonText = line.slice(5).trim();
-      if (!jsonText) continue;
-
-      try {
-        const payload = JSON.parse(jsonText);
-
-        // forward text deltas
-        if (currentEvent === "response.output_text.delta") {
-          const piece = payload?.delta || "";
-          if (piece) {
-            res.write(`data: ${piece}\n\n`);
-          }
-        }
-
-        // end of response
-        if (currentEvent === "response.completed") {
-          ended = true;
-        }
-      } catch (e) {
-        // sometimes non-JSON keepalive frames appear; ignore
-      }
+  function emitBrowser(data) {
+    // Preserve *real* newlines by emitting multiple data lines (SSE spec).
+    // Don't strip spaces — streaming models often send a leading " " delta.
+    const text = String(data).replace(/\r/g, ""); // drop CR only
+    const lines = text.split("\n");
+    for (const l of lines) {
+      res.write(`data: ${l}\n`);
     }
-  };
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      flushLines();
-      if (ended) break;
-    }
-  } catch (e) {
-    console.warn("[streamChat] SSE read interrupted:", e?.message || e);
-  } finally {
-    // send final blank event to close on client
-    res.write("data: \n\n");
-    res.end();
+    // end-of-event boundary
+    res.write("\n");
   }
+
+  function flushFrame() {
+    if (dataLines.length === 0 && !curEvent) return;
+    const data = dataLines.join("\n"); // original payload for this event
+    dataLines = [];
+
+    try {
+      if (curEvent === "response.output_text.delta") {
+        // Some SDKs send a raw JSON string, others { delta: "..." }.
+        let piece = "";
+        try {
+          const parsed = JSON.parse(data);
+          piece =
+            typeof parsed === "string"
+              ? parsed
+              : (parsed && (parsed.delta ?? parsed.text ?? "")) || "";
+        } catch {
+          // Not JSON — treat as raw text delta (preserve spaces)
+          piece = data;
+        }
+        // Emit even if piece is a single space — it's significant in streaming.
+        if (piece !== undefined && piece !== null) emitBrowser(piece);
+      } else if (
+        curEvent === "response.completed" ||
+        curEvent === "response.error" ||
+        curEvent === "error"
+      ) {
+        finished = true;
+      }
+    } finally {
+      curEvent = "";
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    // process line by line, honoring blank-line frame boundaries
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+
+      if (line.startsWith("event:")) {
+        curEvent = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        // DO NOT trimStart() — leading spaces are meaningful deltas.
+        dataLines.push(line.slice(5));
+      } else if (line.trim() === "") {
+        // end of one SSE event frame
+        flushFrame();
+        if (finished) break;
+      }
+    }
+    if (finished) break;
+  }
+
+  // 5) Close client stream
+  res.write("data: \n\n");
+  res.end();
 }
